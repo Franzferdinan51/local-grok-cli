@@ -2479,7 +2479,7 @@ pub(crate) async fn spawn_session_on_thread(
                         inference_idle_timeout_secs,
                         max_retries,
                         subagent_rate_limit_max_attempts,
-                        web_search_sampling_config,
+                        _web_search_sampling_config,
                         web_fetch_config,
                         image_gen_config,
                         video_gen_config,
