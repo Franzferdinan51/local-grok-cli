@@ -1011,6 +1011,47 @@ mod tests {
         assert_eq!(mode, AuthStartMode::Pending);
     }
 
+    /// Local-first: empty catalog, no XAI_API_KEY, default LM Studio URL.
+    /// initialize() applies `apply_local_inference_auth` then `build_auth_methods`;
+    /// the pager must not auto-open xAI browser login.
+    #[test]
+    fn local_lm_studio_shell_auth_methods_skip_login_screen() {
+        use xai_grok_shell::agent::auth_method::{
+            AuthMethodsBuildInputs, apply_local_inference_auth, build_auth_methods,
+        };
+        use xai_grok_shell::agent::config::{Config, LM_STUDIO_BASE_URL_DEFAULT};
+
+        let cfg = Config::default();
+        let (has_external_api_key, preferred_method) = apply_local_inference_auth(
+            false,
+            LM_STUDIO_BASE_URL_DEFAULT,
+            false,
+            cfg.grok_com_config.preferred_method,
+        );
+        let built = build_auth_methods(AuthMethodsBuildInputs {
+            has_external_api_key,
+            has_cached_token: false,
+            has_enterprise_oidc: false,
+            enterprise_oidc_issuer: None,
+            login_label: None,
+            has_auth_provider_command: false,
+            preferred_method,
+        });
+        let (needs, label, method_id, mode) = startup_auth_metadata(&built.methods);
+        assert!(
+            !needs,
+            "local LM Studio must not report needs_login; first method was {:?}",
+            built.methods.first().map(|m| m.id().0.as_ref())
+        );
+        assert!(label.is_none());
+        assert!(method_id.is_none());
+        assert_eq!(mode, AuthStartMode::Pending);
+        assert_eq!(
+            built.methods.first().map(|m| m.id().0.as_ref()),
+            Some("xai.api_key")
+        );
+    }
+
     /// Inverse direction: when `xai.api_key` is NOT in the list, the pager MUST show the login screen.
     /// We assert this with `xai.api_key` present LATER in the list (the shape of a past regression) and confirm the pager still requires login.
     /// The pager only inspects `auth_methods.first()`.

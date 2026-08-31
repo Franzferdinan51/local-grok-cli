@@ -261,6 +261,18 @@ impl acp::Agent for MvpAgent {
                 );
             }
         }
+        let local_inference = crate::agent::config::is_local_inference_url(
+            &self.cfg.borrow().endpoints.resolve_inference_base_url(),
+        );
+        // Pin API-key auth in memory so leftover grok.com OAuth is never
+        // advertised or auto-started on a local LM Studio host.
+        if local_inference
+            && !disable_api_key_auth
+            && self.cfg.borrow().grok_com_config.preferred_method.is_none()
+        {
+            self.cfg.borrow_mut().grok_com_config.preferred_method =
+                Some(crate::auth::PreferredAuthMethod::ApiKey);
+        }
         let preferred_method_early = self.cfg.borrow().grok_com_config.preferred_method;
         let xai_api_base_url = self.cfg.borrow().endpoints.xai_api_base_url.clone();
         let has_byok = self
@@ -268,7 +280,9 @@ impl acp::Agent for MvpAgent {
             .models()
             .values()
             .any(crate::agent::config::ModelEntry::has_own_credentials);
-        let first_party_env_ok = if crate::auth::should_probe_first_party_env_key(
+        let first_party_env_ok = if local_inference {
+            true
+        } else if crate::auth::should_probe_first_party_env_key(
             disable_api_key_auth,
             has_byok,
             auth_method::has_xai_api_key_env(),
@@ -288,6 +302,12 @@ impl acp::Agent for MvpAgent {
             self.models_manager.models().values(),
             first_party_env_ok,
         );
+        let (has_external_api_key, _) = auth_method::apply_local_inference_auth(
+            disable_api_key_auth,
+            &self.cfg.borrow().endpoints.resolve_inference_base_url(),
+            has_external_api_key,
+            preferred_method_early,
+        );
         let init_has_current = self.auth_manager.current().is_some();
         let init_is_expired = self.auth_manager.is_expired();
         xai_grok_telemetry::unified_log::info(
@@ -301,7 +321,12 @@ impl acp::Agent for MvpAgent {
             ),
         );
         let mut has_cached_token = init_has_current;
-        if !init_has_current && init_is_expired {
+        if !matches!(
+            preferred_method_early,
+            Some(crate::auth::PreferredAuthMethod::ApiKey)
+        ) && !init_has_current
+            && init_is_expired
+        {
             has_cached_token = match self.auth_manager.silent_refresh().await {
                 SilentRefresh::Renewed(_) => true,
                 SilentRefresh::Failed(remedy) => remedy.is_self_healing(),
@@ -337,7 +362,10 @@ impl acp::Agent for MvpAgent {
                 None,
                 Some(serde_json::json!({ "issuer": issuer })),
             );
-        } else {
+        } else if !matches!(
+            preferred_method_early,
+            Some(crate::auth::PreferredAuthMethod::ApiKey)
+        ) {
             tracing::info!(
                 label = ?login_label,
                 has_auth_provider,
@@ -573,6 +601,12 @@ impl acp::Agent for MvpAgent {
                                 Some(serde_json::json!({ "error": e.to_string() })),
                             );
                         }
+                    } else if crate::agent::config::is_local_inference_url(
+                        &self.cfg.borrow().endpoints.resolve_inference_base_url(),
+                    ) {
+                        sampling_config.api_key = Some(
+                            crate::agent::config::LM_STUDIO_DUMMY_API_KEY.to_owned(),
+                        );
                     } else if !self
                         .models_manager
                         .models()

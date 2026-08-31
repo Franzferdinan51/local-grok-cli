@@ -1,6 +1,6 @@
 use agent_client_protocol as acp;
 
-use crate::agent::config::ModelEntry;
+use crate::agent::config::{is_local_inference_url, ModelEntry};
 use crate::auth::PreferredAuthMethod;
 
 /// Shared, live handle to the agent's current ACP auth method id.
@@ -87,6 +87,28 @@ where
     }
     let has_byok = models.into_iter().any(ModelEntry::has_own_credentials);
     has_byok || (has_xai_api_key_env() && first_party_env_ok)
+}
+
+/// Local LM Studio (loopback inference) is API-key auth with a dummy bearer.
+///
+/// Catalog load can still be empty at `initialize()`, so this must not depend
+/// on `ModelEntry::has_own_credentials`. When local, pin `preferred_method` to
+/// `ApiKey` so `grok.com` is not advertised and the pager does not auto-open
+/// xAI browser login.
+pub fn apply_local_inference_auth(
+    disable_api_key_auth: bool,
+    inference_base_url: &str,
+    has_external_api_key: bool,
+    preferred_method: Option<PreferredAuthMethod>,
+) -> (bool, Option<PreferredAuthMethod>) {
+    let local = !disable_api_key_auth && is_local_inference_url(inference_base_url);
+    let has_external_api_key = has_external_api_key || local;
+    let preferred_method = if local && preferred_method.is_none() {
+        Some(PreferredAuthMethod::ApiKey)
+    } else {
+        preferred_method
+    };
+    (has_external_api_key, preferred_method)
 }
 
 /// Inputs to [`build_auth_methods`].
@@ -1176,5 +1198,79 @@ mod tests {
         });
         assert_eq!(method_ids(&built), vec![GROK_COM_METHOD_ID]);
         assert!(built.default_auth_method_id.is_none());
+    }
+
+    // ── local-first LM Studio: no xAI browser login ─────────────────────
+
+    #[test]
+    #[serial]
+    fn local_lm_studio_init_advertises_api_key_without_xai_env() {
+        let _g1 = EnvGuard::unset(XAI_API_KEY_ENV_VAR);
+        let _g2 = EnvGuard::unset(LEGACY_XAI_API_KEY_ENV_VAR);
+        let _g3 = EnvGuard::unset("GROK_MODELS_BASE_URL");
+        let _g4 = EnvGuard::unset("LM_STUDIO_URL");
+
+        let cfg = Config::default();
+        let inference = cfg.endpoints.resolve_inference_base_url();
+        assert!(
+            crate::agent::config::is_local_inference_url(&inference),
+            "default fork endpoints must be local LM Studio"
+        );
+
+        // Catalog is often empty at initialize (live fetch not applied yet).
+        let empty: indexmap::IndexMap<String, crate::agent::config::ModelEntry> =
+            indexmap::IndexMap::new();
+        let advertised = should_advertise_xai_api_key(
+            cfg.grok_com_config.api_key_auth_disabled(),
+            empty.values(),
+        );
+        assert!(
+            !advertised,
+            "empty catalog + no XAI_API_KEY must not advertise via the BYOK/env predicate alone"
+        );
+
+        let (has_external_api_key, preferred_method) = apply_local_inference_auth(
+            cfg.grok_com_config.api_key_auth_disabled(),
+            &inference,
+            advertised,
+            cfg.grok_com_config.preferred_method,
+        );
+        assert!(has_external_api_key);
+        assert_eq!(preferred_method, Some(PreferredAuthMethod::ApiKey));
+
+        let built = build_auth_methods(AuthMethodsBuildInputs {
+            has_external_api_key,
+            has_cached_token: false,
+            preferred_method,
+            ..default_inputs()
+        });
+        assert_eq!(
+            first_kind(&built.methods),
+            Some(AuthMethodKind::XaiApiKey),
+            "local LM Studio must advertise xai.api_key first so the pager skips browser login"
+        );
+        assert_eq!(method_ids(&built), vec![XAI_API_KEY_METHOD_ID]);
+        assert!(!AuthMethodKind::from_id(built.methods[0].id()).needs_interactive_login());
+        assert_eq!(default_id(&built), Some(XAI_API_KEY_METHOD_ID));
+    }
+
+    #[test]
+    fn local_inference_auth_does_not_pin_remote_hosts() {
+        let (has, preferred) =
+            apply_local_inference_auth(false, "https://api.x.ai/v1", false, None);
+        assert!(!has);
+        assert!(preferred.is_none());
+    }
+
+    #[test]
+    fn local_inference_auth_respects_api_key_kill_switch() {
+        let (has, preferred) = apply_local_inference_auth(
+            true,
+            crate::agent::config::LM_STUDIO_BASE_URL_DEFAULT,
+            false,
+            None,
+        );
+        assert!(!has);
+        assert!(preferred.is_none());
     }
 }
