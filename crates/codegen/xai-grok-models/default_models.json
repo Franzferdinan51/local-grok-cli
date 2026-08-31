@@ -1,0 +1,20 @@
+{
+  "default": "local-model",
+  "web_search": "local-model",
+  "image_description": "local-model",
+  "session_summary": "local-model",
+  "models": [
+    {
+      "id": "local-model",
+      "model": "local-model",
+      "model_family": "local",
+      "name": "LM Studio",
+      "description": "Local LM Studio OpenAI-compatible model (override with LM_STUDIO_MODEL)",
+      "context_window": 131072,
+      "api_backend": "chat_completions",
+      "supports_backend_search": false,
+      "system_prompt_label": "Local",
+      "supports_reasoning_effort": false
+    }
+  ]
+}
