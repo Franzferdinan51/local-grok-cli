@@ -5,3 +5,4 @@
 # local fork extras
 /target/
 *.log
+__pycache__/

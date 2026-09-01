@@ -7,12 +7,28 @@ headless single-turn mode and keeps the MCP wire protocol on stdout.
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 
 NAME = "grok-local-adapter"
 VERSION = "0.1.0"
-GROK = os.environ.get("GROK_BIN", "grok")
+
+
+def default_grok_bin():
+    explicit = os.environ.get("GROK_BIN")
+    if explicit:
+        return explicit
+    # Prefer this fork's binary; fall back to `grok` if that is what PATH has.
+    names = ("grok-local.exe", "grok.exe") if os.name == "nt" else ("grok-local", "grok")
+    for name in names:
+        found = shutil.which(name)
+        if found:
+            return found
+    return names[0]
+
+
+GROK = default_grok_bin()
 DEFAULT_CWD = os.environ.get("GROK_ADAPTER_CWD", str(pathlib.Path.home()))
 MAX_TIMEOUT = int(os.environ.get("GROK_ADAPTER_MAX_TIMEOUT", "600"))
 
@@ -65,7 +81,10 @@ def grok_prompt(args):
         raise ValueError("max_turns must be between 1 and 10")
     cmd = [GROK, "--single", prompt, "--output-format", "plain", "--max-turns", str(turns), "--permission-mode", "auto", "--no-subagents", "--no-plan"]
     env = os.environ.copy()
-    proc = subprocess.run(cmd, cwd=cwd, env=env, text=True, capture_output=True, timeout=timeout)
+    extra = {}
+    if os.name == "nt":
+        extra["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    proc = subprocess.run(cmd, cwd=cwd, env=env, text=True, capture_output=True, timeout=timeout, **extra)
     output = proc.stdout.strip()
     if proc.stderr.strip():
         output += ("\n\n[stderr]\n" + proc.stderr.strip()) if output else ("[stderr]\n" + proc.stderr.strip())

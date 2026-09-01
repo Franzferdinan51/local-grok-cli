@@ -1,0 +1,44 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    name: grok-local (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.94.0
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "29.3"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install DotSlash (Unix)
+        if: runner.os != 'Windows'
+        run: cargo install dotslash --locked
+
+      - name: Build grok-local
+        run: cargo build -p xai-grok-pager-bin --release
+
+      - name: Version
+        shell: bash
+        run: |
+          if [ -f target/release/grok-local.exe ]; then
+            ./target/release/grok-local.exe --version
+          else
+            ./target/release/grok-local --version
+          fi

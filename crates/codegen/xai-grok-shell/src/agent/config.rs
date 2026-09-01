@@ -3904,10 +3904,7 @@ fn default_models(endpoints: &EndpointsConfig) -> IndexMap<String, ModelEntryCon
             } else {
                 m.model
             };
-            let key = m
-                .id
-                .clone()
-                .unwrap_or_else(|| model.clone());
+            let key = m.id.clone().unwrap_or_else(|| model.clone());
             let key = if key == "local-model" {
                 local_slug.to_string()
             } else {

@@ -2120,6 +2120,8 @@ impl MvpAgent {
         model_id: &acp::ModelId,
         origin_client: Option<crate::http::OriginClientInfo>,
     ) -> SamplingConfig {
+        self.models_manager
+            .ensure_local_inference_model(model_id.0.as_ref());
         if let Ok(model) = self.resolve_model_id(model_id) {
             self.prepare_sampling_config_for_model(&model, origin_client.clone())
         } else {

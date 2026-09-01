@@ -30,10 +30,10 @@ manages long-running tasks — without requiring xAI servers at startup.
 This tree is the `grok-local` fork. Config lives in `~/.grok-local` (override
 with `$GROK_HOME`) so it does not collide with an official `grok` install.
 Inference defaults to **LM Studio** at `http://127.0.0.1:1234/v1`. The model
-picker lists only models LM Studio currently exposes (`GET /api/v0/models`,
-then `/v1/models`). Loaded chat models win; downloaded LLMs are listed if none
-are loaded. Set `LM_STUDIO_MODEL` to pick one by id. Web search defaults to
-SearxNG at `http://127.0.0.1:8080` (`SEARXNG_URL`).
+picker lists chat models LM Studio exposes (`GET /api/v0/models`, then
+`/v1/models`): loaded llms/vlms first, then the rest of the downloaded library.
+Embeddings stay hidden. Set `LM_STUDIO_MODEL` to pick one by id. Web search
+defaults to SearxNG at `http://127.0.0.1:8080` (`SEARXNG_URL`).
 
 A small `SOURCE_REV` file at the root records the full monorepo commit SHA
 for the version of the code present in this tree.
@@ -42,25 +42,31 @@ for the version of the code present in this tree.
 
 ---
 
-## Installing the released binary
+## Installing
 
-Prebuilt binaries are published for macOS, Linux, and Windows:
+This fork is **not** the official `grok` CLI. Do not pipe `https://x.ai/cli/install.sh`
+(or `install.ps1`) into a shell — those installers put official `grok` under
+`~/.grok` and will collide with this tree's `~/.grok-local` layout.
+
+Build from source on **Linux, macOS, and Windows**:
 
 ```sh
-curl -fsSL https://x.ai/cli/install.sh | bash   # macOS / Linux / Git Bash
-irm https://x.ai/cli/install.ps1 | iex          # Windows PowerShell
-grok --version
+cargo build -p xai-grok-pager-bin --release
+./target/release/grok-local --version          # Windows: target\release\grok-local.exe
 ```
 
-See the [changelog](https://x.ai/build/changelog) for the latest fixes,
-features, and improvements in each release.
+Put `target/release` (or a copy of `grok-local`) on your `PATH`. Config still
+lives in `~/.grok-local` (`%USERPROFILE%\.grok-local` on Windows), override
+with `$GROK_HOME`.
 
 ## Building from source
 
 Requirements:
 
 - **Rust** — the toolchain is pinned by [`rust-toolchain.toml`](rust-toolchain.toml);
-  `rustup` installs it automatically on first build.
+  `rustup` installs it automatically on first build. The host target (including
+  `aarch64-apple-darwin`, `x86_64-apple-darwin`, and `*-pc-windows-msvc`) is
+  added by rustup; extra Linux triples in that file are for Linux CI only.
 - **[DotSlash](https://dotslash-cli.com)** — required so hermetic tools under
   [`bin/`](bin/) (notably [`bin/protoc`](bin/protoc)) can download and run.
   Install it and ensure `dotslash` is on your `PATH` **before** building:
@@ -71,19 +77,24 @@ Requirements:
   /usr/bin/env dotslash --help   # sanity check
   ```
 
-- **protoc** — proto codegen resolves [`bin/protoc`](bin/protoc) via DotSlash,
-  or falls back to a `protoc` on `PATH` / `$PROTOC`.
-- macOS and Linux are supported build hosts; Windows builds are best-effort
-  and not currently tested from this tree.
+- **protoc** — proto codegen resolves [`bin/protoc`](bin/protoc) via DotSlash
+  (Linux, macOS Apple Silicon, macOS Intel, Windows x64). On Windows, if the
+  DotSlash wrapper cannot be executed, install `protoc` on `PATH` or set
+  `$PROTOC` / `%PROTOC%` to `protoc.exe`. Windows ARM64 has no protobuf 29.3
+  zip in this wrapper; use a PATH `protoc`.
+- Linux, macOS, and Windows x64 are supported build hosts. Kernel sandboxing
+  (Landlock / Seatbelt) is Unix-only; Windows runs with the same process-level
+  helpers grok-build uses there.
 
 ```sh
 cargo run -p xai-grok-pager-bin              # build + launch the TUI
-cargo build -p xai-grok-pager-bin --release  # release binary: target/release/xai-grok-pager
+cargo build -p xai-grok-pager-bin --release  # release binary: target/release/grok-local
 cargo check -p xai-grok-pager-bin            # fast validation
 ```
 
-The binary artifact is named `xai-grok-pager`; official installs ship it as
-`grok`. On first launch it opens your browser to authenticate — see the
+The binary artifact is named `grok-local` (`grok-local.exe` on Windows) so it
+does not collide with an official `grok` install. Local LM Studio inference is
+used at startup; xAI browser login is skipped. See the
 [authentication guide](crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md).
 
 ## Documentation

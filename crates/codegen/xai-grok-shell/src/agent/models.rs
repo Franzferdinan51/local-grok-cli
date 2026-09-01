@@ -512,6 +512,37 @@ impl ModelsManager {
         self.set_current_model_id_internal(id);
     }
 
+    /// If inference is local LM Studio and `id` is missing from the catalog,
+    /// insert a chat_completions entry so `/resume` can keep the session model
+    /// instead of falling back to the bundled slug / Responses backend.
+    pub(crate) fn ensure_local_inference_model(&self, id: &str) {
+        let id = id.trim();
+        if id.is_empty() {
+            return;
+        }
+        let endpoints = self.inner.cfg.read().endpoints.clone();
+        let base = endpoints.resolve_inference_base_url();
+        if !config::is_local_inference_url(&base) {
+            return;
+        }
+        {
+            let cat = self.inner.catalog.read();
+            if cat.models.contains_key(id)
+                || cat.models.values().any(|entry| entry.info.model == id)
+            {
+                return;
+            }
+        }
+        let entry = lm_studio::entry_for_id(id, &base);
+        let mut cat = self.inner.catalog.write();
+        if !cat.models.contains_key(id) {
+            cat.models.insert(id.to_string(), entry.clone());
+            if let Some(pref) = cat.prefetched.as_mut() {
+                pref.entry(id.to_string()).or_insert(entry);
+            }
+        }
+    }
+
     fn set_current_model_id_internal(&self, id: acp::ModelId) {
         let changed = {
             let mut cur = self.inner.current_model_id.write();
@@ -1150,10 +1181,8 @@ impl ModelsManager {
         let local = config::is_local_inference_url(
             &self.inner.cfg.read().endpoints.resolve_inference_base_url(),
         );
-        self.fetch_and_apply_inner(
-            crate::util::config::resolve_remote_fetch_enabled() || local,
-        )
-        .await
+        self.fetch_and_apply_inner(crate::util::config::resolve_remote_fetch_enabled() || local)
+            .await
     }
 
     async fn fetch_and_apply_inner(&self, remote_fetch_enabled: bool) {
@@ -1378,11 +1407,11 @@ mod resolution;
 pub(crate) use cache::*;
 pub(crate) use endpoint::*;
 pub(crate) use fetch::*;
-pub(crate) use lm_studio::*;
 pub use fetch::{
     EarlyPrefetchHandle, EarlyPrefetchResult, start_early_prefetch,
     start_early_prefetch_settings_only, start_early_prefetch_with_auth,
 };
+pub(crate) use lm_studio::*;
 pub(crate) use resolution::*;
 
 #[cfg(test)]

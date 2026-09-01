@@ -24,6 +24,29 @@ fn is_github_actions() -> bool {
     env::var_os("GITHUB_ACTIONS").is_some()
 }
 
+/// Windows cannot `CreateProcess` a DotSlash shebang wrapper. If `dotslash`
+/// is on PATH, write a `.cmd` trampoline under `$OUT_DIR` so prost-build can
+/// exec it. Unix never needs this: the wrapper is directly executable.
+#[cfg(windows)]
+fn windows_dotslash_trampoline(wrapper: &Path) -> Option<PathBuf> {
+    let out_dir = env::var_os("OUT_DIR")?;
+    let abs = env::current_dir()
+        .ok()
+        .map(|cwd| cwd.join(wrapper))
+        .unwrap_or_else(|| wrapper.to_path_buf());
+    let abs = abs.canonicalize().unwrap_or(abs);
+    let quoted = abs.to_string_lossy().replace('"', "");
+    let cmd_path = PathBuf::from(out_dir).join("protoc-dotslash.cmd");
+    let body = format!("@echo off\r\ndotslash \"{quoted}\" %*\r\n");
+    std::fs::write(&cmd_path, body).ok()?;
+    Some(cmd_path)
+}
+
+#[cfg(not(windows))]
+fn windows_dotslash_trampoline(_wrapper: &Path) -> Option<PathBuf> {
+    None
+}
+
 /// Find `protoc` command.
 ///
 /// Search order:
@@ -59,6 +82,14 @@ pub fn find_protoc() -> anyhow::Result<Option<PathBuf>> {
             match check_protoc_good(&protoc) {
                 Ok(()) => return Ok(Some(protoc)),
                 Err(e) => {
+                    // Windows: shebang wrappers are not CreateProcess-able; try a
+                    // `dotslash` .cmd trampoline before giving up on the wrapper.
+                    let abs = dir.join("bin/protoc");
+                    if let Some(cmd) = windows_dotslash_trampoline(&abs) {
+                        if check_protoc_good(&cmd).is_ok() {
+                            return Ok(Some(cmd));
+                        }
+                    }
                     // bin/protoc exists but can't execute — likely the dotslash wrapper
                     // in an environment without dotslash (e.g. Bazel remote execution).
                     // Fall through to PATH-based lookup below.

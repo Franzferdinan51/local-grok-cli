@@ -8,7 +8,8 @@ endpoint speaks ACP and must not be placed directly in an MCP JSON file.
 
 ## Environment
 
-- `GROK_BIN`: absolute Grok executable path (recommended)
+- `GROK_BIN`: absolute Grok executable path (recommended). When unset, the
+  adapter looks for `grok-local` (`grok-local.exe` on Windows) then `grok`.
 - `GROK_ADAPTER_CWD`: default working directory
 - `GROK_ADAPTER_MAX_TIMEOUT`: maximum per-call timeout, default 600 seconds
 

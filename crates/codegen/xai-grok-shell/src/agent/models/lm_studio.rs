@@ -8,7 +8,7 @@ use std::num::NonZeroU64;
 use indexmap::IndexMap;
 
 use crate::agent::config::{
-    EnvKeys, EndpointsConfig, LM_STUDIO_DUMMY_API_KEY, ModelEntry, ModelInfo,
+    EndpointsConfig, EnvKeys, LM_STUDIO_DUMMY_API_KEY, ModelEntry, ModelInfo,
 };
 use crate::sampling::ApiBackend;
 
@@ -89,14 +89,47 @@ fn parse_data_array(body: &serde_json::Value, v0: bool) -> Vec<DiscoveredModel> 
     out
 }
 
-/// Prefer currently loaded chat models; if none are loaded, list downloaded chat models.
+/// List downloaded chat models (llm / vlm). Loaded ones stay first so `/model`
+/// still surfaces what is in memory, without hiding the rest of the library.
 pub fn select_listed_models(models: Vec<DiscoveredModel>) -> Vec<DiscoveredModel> {
-    let chat: Vec<DiscoveredModel> = models
+    let mut chat: Vec<DiscoveredModel> = models
         .into_iter()
         .filter(|m| is_chat_model(&m.kind, &m.id))
         .collect();
-    let loaded: Vec<DiscoveredModel> = chat.iter().filter(|m| m.loaded).cloned().collect();
-    if loaded.is_empty() { chat } else { loaded }
+    chat.sort_by_key(|m| !m.loaded);
+    chat
+}
+
+/// Catalog entry for one LM Studio chat model id (OpenAI-compat, dummy key).
+pub fn entry_for_id(id: &str, inference_base: &str) -> ModelEntry {
+    entry_for_discovered(
+        &DiscoveredModel {
+            id: id.to_string(),
+            loaded: false,
+            max_context_length: None,
+            kind: "llm".to_string(),
+        },
+        inference_base,
+    )
+}
+
+fn entry_for_discovered(model: &DiscoveredModel, inference_base: &str) -> ModelEntry {
+    let mut info = ModelInfo::fallback(&model.id);
+    info.base_url = inference_base.to_string();
+    info.name = Some(model.id.clone());
+    info.model_family = Some("lm-studio".to_string());
+    info.api_backend = ApiBackend::ChatCompletions;
+    info.supports_backend_search = false;
+    if let Some(cw) = model.max_context_length.and_then(NonZeroU64::new) {
+        info.context_window = cw;
+    }
+    ModelEntry {
+        info,
+        api_key: Some(LM_STUDIO_DUMMY_API_KEY.to_owned()),
+        env_key: Some(EnvKeys::new(["LM_API_TOKEN", "OPENAI_API_KEY"])),
+        auth_provider: None,
+        api_base_url: Some(inference_base.to_string()),
+    }
 }
 
 /// Turn discovered LM Studio models into the shell catalog (chat_completions, dummy key).
@@ -107,23 +140,10 @@ pub fn catalog_from_discovered(
     let listed = select_listed_models(models);
     let mut map = IndexMap::with_capacity(listed.len());
     for model in listed {
-        let mut info = ModelInfo::fallback(&model.id);
-        info.base_url = inference_base.to_string();
-        info.name = Some(model.id.clone());
-        info.model_family = Some("lm-studio".to_string());
-        info.api_backend = ApiBackend::ChatCompletions;
-        info.supports_backend_search = false;
-        if let Some(cw) = model.max_context_length.and_then(NonZeroU64::new) {
-            info.context_window = cw;
-        }
-        let entry = ModelEntry {
-            info,
-            api_key: Some(LM_STUDIO_DUMMY_API_KEY.to_owned()),
-            env_key: Some(EnvKeys::new(["LM_API_TOKEN", "OPENAI_API_KEY"])),
-            auth_provider: None,
-            api_base_url: Some(inference_base.to_string()),
-        };
-        map.insert(model.id, entry);
+        map.insert(
+            model.id.clone(),
+            entry_for_discovered(&model, inference_base),
+        );
     }
     map
 }
@@ -195,7 +215,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn v0_prefers_loaded_llms_and_drops_embeddings() {
+    fn v0_lists_all_chat_models_loaded_first_and_drops_embeddings() {
         let body = serde_json::json!({
             "data": [
                 {
@@ -205,24 +225,26 @@ mod tests {
                     "max_context_length": 8192
                 },
                 {
-                    "id": "ornith-1.5-35b-a3b",
-                    "type": "llm",
-                    "state": "loaded",
-                    "max_context_length": 32768
-                },
-                {
                     "id": "other-gguf",
                     "type": "llm",
                     "state": "not-loaded",
                     "max_context_length": 8192
+                },
+                {
+                    "id": "ornith-1.5-35b-a3b",
+                    "type": "llm",
+                    "state": "loaded",
+                    "max_context_length": 32768
                 }
             ]
         });
         let listed = select_listed_models(parse_v0_models(&body));
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].id, "ornith-1.5-35b-a3b");
+        assert_eq!(
+            listed.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            vec!["ornith-1.5-35b-a3b", "other-gguf"]
+        );
         let catalog = catalog_from_lm_studio_json(&body, "http://127.0.0.1:1234/v1");
-        assert_eq!(catalog.len(), 1);
+        assert_eq!(catalog.len(), 2);
         let entry = catalog.get("ornith-1.5-35b-a3b").expect("discovered model");
         assert_eq!(entry.info.model, "ornith-1.5-35b-a3b");
         assert_eq!(entry.info.base_url, "http://127.0.0.1:1234/v1");
@@ -230,8 +252,8 @@ mod tests {
         assert_eq!(entry.info.context_window.get(), 32768);
         assert_eq!(entry.api_key.as_deref(), Some(LM_STUDIO_DUMMY_API_KEY));
         assert!(!entry.info.supports_backend_search);
+        assert!(catalog.contains_key("other-gguf"));
         assert!(!catalog.contains_key("text-embedding-nomic"));
-        assert!(!catalog.contains_key("other-gguf"));
         assert!(!catalog.contains_key("local-model"));
         assert!(!catalog.contains_key("grok-4.6"));
     }
@@ -274,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn live_shaped_v0_fixture_only_loaded_chat_models() {
+    fn live_shaped_v0_fixture_lists_downloaded_chat_models() {
         let body = serde_json::json!({
             "data": [
                 {
@@ -302,11 +324,32 @@ mod tests {
         });
         let catalog = catalog_from_lm_studio_json(&body, "http://127.0.0.1:1234/v1");
         let ids: Vec<_> = catalog.keys().cloned().collect();
-        assert_eq!(ids, vec!["ornith-1.5-35b-a3b".to_string()]);
-        assert!(!catalog.keys().any(|k| k.contains("embed") || k.starts_with("grok-")));
+        assert_eq!(
+            ids,
+            vec![
+                "ornith-1.5-35b-a3b".to_string(),
+                "ornith-1.5-9b".to_string(),
+                "google/gemma-4-26b-a4b-qat".to_string()
+            ]
+        );
+        assert!(
+            !catalog
+                .keys()
+                .any(|k| k.contains("embed") || k.starts_with("grok-"))
+        );
         let entry = &catalog["ornith-1.5-35b-a3b"];
         assert_eq!(entry.info.base_url, "http://127.0.0.1:1234/v1");
         assert_eq!(entry.info.api_backend, ApiBackend::ChatCompletions);
         assert_eq!(entry.info.context_window.get(), 262144);
+    }
+
+    #[test]
+    fn entry_for_id_is_local_chat_completions() {
+        let entry = entry_for_id("ornith-1.5-9b", "http://127.0.0.1:1234/v1");
+        assert_eq!(entry.info.model, "ornith-1.5-9b");
+        assert_eq!(entry.info.base_url, "http://127.0.0.1:1234/v1");
+        assert_eq!(entry.info.api_backend, ApiBackend::ChatCompletions);
+        assert_eq!(entry.api_key.as_deref(), Some(LM_STUDIO_DUMMY_API_KEY));
+        assert_eq!(entry.info.model_family.as_deref(), Some("lm-studio"));
     }
 }

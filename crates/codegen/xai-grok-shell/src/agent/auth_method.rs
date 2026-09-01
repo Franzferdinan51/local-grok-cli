@@ -1,6 +1,6 @@
 use agent_client_protocol as acp;
 
-use crate::agent::config::{is_local_inference_url, ModelEntry};
+use crate::agent::config::{ModelEntry, is_local_inference_url};
 use crate::auth::PreferredAuthMethod;
 
 /// Shared, live handle to the agent's current ACP auth method id.

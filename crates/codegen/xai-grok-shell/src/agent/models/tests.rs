@@ -8,8 +8,7 @@ fn test_manager() -> ModelsManager {
     let tmp = std::env::temp_dir().join("grok-test-models-manager");
     let auth_manager = Arc::new(AuthManager::new(&tmp, GrokComConfig::default()));
     let mut cfg = config::Config::default();
-    cfg.endpoints.cli_chat_proxy_base_url =
-        Some("https://cli-chat-proxy.grok.com/v1".to_owned());
+    cfg.endpoints.cli_chat_proxy_base_url = Some("https://cli-chat-proxy.grok.com/v1".to_owned());
     cfg.endpoints.models_base_url = None;
     ModelsManagerBuilder::new(
         None,
@@ -549,10 +548,8 @@ fn config_from_toml(toml: &str) -> config::Config {
     if value.get("endpoints").is_none() {
         value.as_table_mut().unwrap().insert(
             "endpoints".into(),
-            toml::from_str(
-                "cli_chat_proxy_base_url = \"https://cli-chat-proxy.grok.com/v1\"\n",
-            )
-            .unwrap(),
+            toml::from_str("cli_chat_proxy_base_url = \"https://cli-chat-proxy.grok.com/v1\"\n")
+                .unwrap(),
         );
     }
     config::Config::new_from_toml_cfg(&value).unwrap()
