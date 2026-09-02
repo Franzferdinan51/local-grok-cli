@@ -45,8 +45,16 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Export PROTOC
+        if: runner.os != 'Windows'
         shell: bash
         run: echo "PROTOC=$(command -v protoc)" >> "$GITHUB_ENV"
+
+      - name: Export PROTOC (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $p = (Get-Command protoc).Source
+          Add-Content -Path $env:GITHUB_ENV -Value "PROTOC=$p"
 
       - name: Install DotSlash (Unix)
         if: runner.os != 'Windows'

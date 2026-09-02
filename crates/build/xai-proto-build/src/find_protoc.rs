@@ -72,6 +72,22 @@ pub fn find_protoc() -> anyhow::Result<Option<PathBuf>> {
     }
 
     // 2. Walk up directories looking for bin/protoc (dotslash wrapper).
+    // Windows cannot CreateProcess a shebang file; skip to PATH/PROTOC.
+    if cfg!(windows) {
+        for name in ["protoc", "protoc.exe"] {
+            if check_protoc_good(Path::new(name)).is_ok() {
+                return Ok(Some(PathBuf::from(name)));
+            }
+        }
+        if is_github_actions() {
+            return Err(anyhow::anyhow!(
+                "`protoc` not found (checked $PROTOC env and PATH)"
+            ));
+        }
+        eprintln!("`protoc` not found; install protoc and set PROTOC");
+        return Ok(None);
+    }
+
     let cwd = env::current_dir()?;
     let mut dir = cwd.clone();
     let mut dir_rel = PathBuf::new();

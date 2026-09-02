@@ -142,6 +142,16 @@ impl XaiProtoBuilder {
             );
         }
 
+        // Windows protoc cannot write --dependency_out to /dev/stdout, and
+        // makefile-style dep paths from a Git-bash PROTOC are unreliable here.
+        // Invalidate on the listed .proto inputs only.
+        if cfg!(windows) {
+            for proto in protos {
+                println!("cargo:rerun-if-changed={}", proto.display());
+            }
+            return Ok(());
+        }
+
         // Can only process one input file when using --dependency_out=FILE.
         // Do not use /dev/stdout or /dev/null: those paths do not exist on Windows
         // (CI failed with `protoc: /dev/stdout: No such file or directory`).
