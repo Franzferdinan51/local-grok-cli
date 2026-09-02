@@ -1,4 +1,6 @@
-# Grok Local 0.4.4
+# Grok Local 0.4.5
+
+- Fixed the local fork startup update prompt so it no longer offers an xAI upstream version or routes `Ctrl+U` through the upstream installer.
 
 - Auto-update now keeps xAI upstream checks separate from local fork releases. `grok-local` automatically updates only from the local fork, while upstream source changes remain available through `grok-local update --upstream`.
 

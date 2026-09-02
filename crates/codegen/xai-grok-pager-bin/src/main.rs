@@ -2359,7 +2359,9 @@ async fn async_main(args: PagerArgs) -> Result<()> {
     let bg_update_wait: std::sync::Arc<tokio::sync::Mutex<Option<UpdateWaitHandle>>> =
         std::sync::Arc::new(tokio::sync::Mutex::new(None));
     let bg_update_rx: Option<tokio::sync::oneshot::Receiver<Option<auto_update::UpdateAvailable>>> =
-        if should_check_for_updates(args.no_auto_update) {
+        if should_check_for_updates(args.no_auto_update)
+            && tui_background_update_uses_upstream(&current_executable_name())
+        {
             let update_config = update_config.clone();
             let wait_slot = bg_update_wait.clone();
             let (tx, rx) = tokio::sync::oneshot::channel();
@@ -2475,17 +2477,25 @@ fn should_check_for_updates(no_auto_update_flag: bool) -> bool {
         .is_some_and(|v| env_flag_enabled(&v.to_string_lossy()))
 }
 
+fn current_executable_name() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.file_name().map(|name| name.to_string_lossy().into_owned()))
+        .unwrap_or_default()
+}
+
+fn tui_background_update_uses_upstream(executable_name: &str) -> bool {
+    matches!(
+        xai_grok_update::fork_release::automatic_update_source(executable_name),
+        xai_grok_update::fork_release::AutomaticUpdateSource::UpstreamInstaller
+    )
+}
+
 async fn run_auto_update_for_active_binary(
     no_auto_update_flag: bool,
     update_config: &UpdateConfig,
 ) {
-    let executable_name = std::env::current_exe()
-        .ok()
-        .and_then(|path| {
-            path.file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-        })
-        .unwrap_or_default();
+    let executable_name = current_executable_name();
     match xai_grok_update::fork_release::automatic_update_source(&executable_name) {
         xai_grok_update::fork_release::AutomaticUpdateSource::ForkRelease => {
             if no_auto_update_flag {
@@ -2689,6 +2699,13 @@ async fn signal_leaders_to_relaunch(installed_version: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_fork_does_not_use_upstream_tui_update_prompt() {
+        assert!(!tui_background_update_uses_upstream("grok-local"));
+        assert!(!tui_background_update_uses_upstream("grok-local.exe"));
+        assert!(tui_background_update_uses_upstream("grok"));
+    }
     #[test]
     fn embedded_agent_commands_heal_managed_policy_before_sandboxing() {
         for args in [
