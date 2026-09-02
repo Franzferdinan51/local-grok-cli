@@ -85,7 +85,10 @@ impl ChangelogManager {
     /// JSON is cached only after a successful parse; the markdown cache is write-through since it's consumed as raw text.
     pub fn fetch(&self) -> Changelog {
         // Always re-resolve from env so a caller holding an older manager (or a stale OnceLock) still reads the live harness home
-        Self::from_env_home().fetch_with(changelog_offline(), CHANGELOG_BASE)
+        let build = Self::from_env_home().fetch_with(changelog_offline(), CHANGELOG_BASE);
+        // Merge local notes even when the upstream CDN is unavailable so the hero and
+        // `/release-notes` always identify the fork's changes.
+        merge_with_local(build)
     }
 
     /// Fetch using this manager's already-resolved cache paths, an explicit offline flag, and an explicit CDN base.
@@ -173,6 +176,48 @@ impl ChangelogManager {
             return Some(content);
         }
         read_cache(cache_path)
+    }
+}
+
+const LOCAL_CHANGELOG_MD: &str = include_str!("local_changelog.md");
+const LOCAL_CHANGELOG_JSON: &str = include_str!("local_changelog.json");
+
+fn local_entries() -> Vec<ChangelogEntry> {
+    serde_json::from_str(LOCAL_CHANGELOG_JSON).unwrap_or_default()
+}
+
+fn prefix_entry(prefix: &str, mut entry: ChangelogEntry) -> ChangelogEntry {
+    if !entry.description.is_empty() {
+        entry.description = format!("**{prefix}** — {}", entry.description);
+    }
+    entry
+}
+
+/// Grok Local notes first, then the grok-build CDN/cache notes so the hero shows both.
+fn merge_with_local(build: Changelog) -> Changelog {
+    let mut entries: Vec<ChangelogEntry> = local_entries()
+        .into_iter()
+        .map(|e| prefix_entry("Grok Local", e))
+        .collect();
+    if let Some(build_entries) = build.entries {
+        entries.extend(
+            build_entries
+                .into_iter()
+                .map(|e| prefix_entry("Grok Build", e)),
+        );
+    }
+    let markdown = match build.markdown {
+        Some(build_md) if !build_md.trim().is_empty() => Some(format!(
+            "{}\n\n---\n\n# Grok Build {}\n\n{}",
+            LOCAL_CHANGELOG_MD.trim(),
+            xai_grok_version::VERSION,
+            build_md.trim()
+        )),
+        _ => Some(LOCAL_CHANGELOG_MD.to_string()),
+    };
+    Changelog {
+        markdown,
+        entries: Some(entries),
     }
 }
 
@@ -318,6 +363,36 @@ mod tests {
         ];
         let bullets = bullets_from_entries(&entries, 10);
         assert_eq!(bullets, vec!["Good entry", "Another good one"]);
+    }
+
+    #[test]
+    fn merge_with_local_prefixes_both_products() {
+        let build = Changelog {
+            markdown: Some("# 1.0.16\n\n- build note\n".into()),
+            entries: Some(vec![ChangelogEntry {
+                category: "fixes".into(),
+                description: "A grok-build fix".into(),
+                breaking_change: false,
+            }]),
+        };
+        let merged = merge_with_local(build);
+        let entries = merged.entries.expect("merged entries");
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.description.contains("Grok Local")),
+            "local notes must appear"
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.description.contains("Grok Build") && e.description.contains("A grok-build fix")),
+            "grok-build notes must appear: {entries:?}"
+        );
+        let md = merged.markdown.expect("merged markdown");
+        assert!(md.contains("Grok Local"), "{md}");
+        assert!(md.contains("Grok Build"), "{md}");
+        assert!(md.contains("build note"), "{md}");
     }
 
     #[test]

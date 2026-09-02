@@ -417,11 +417,11 @@ impl WelcomeLayout {
 
 /// Controls what the version badge renders.
 pub(super) enum VersionBadgeMode<'a> {
-    /// Full badge: team | tier | api_key | **Grok Build** VERSION+channel (right-aligned).
+    /// Full badge: team | tier | api_key | **Grok Local** LOCAL | **Grok Build** VERSION+channel (right-aligned).
     Full { subscription_tier: Option<&'a str> },
     /// Hero footer: team | api_key | channel (right-aligned, gray).
     HeroFooter,
-    /// Hero inline: **Grok Build**  VERSION (left-aligned).
+    /// Hero inline: **Grok Local** LOCAL | **Grok Build** VERSION (left-aligned).
     HeroInline,
 }
 
@@ -471,21 +471,23 @@ pub(super) fn render_version_badge(
             "Logged in with API key",
             Style::default().fg(theme.gray),
         ));
-        spans.push(sep);
+        spans.push(sep.clone());
     }
 
     let channel = xai_grok_update::channel_label();
+    let product = Style::default()
+        .fg(theme.text_primary)
+        .add_modifier(Modifier::BOLD);
+    let ver = Style::default().fg(theme.gray);
     match &mode {
         VersionBadgeMode::Full { .. } => {
-            spans.push(Span::styled(
-                "Grok Build  ",
-                Style::default()
-                    .fg(theme.text_primary)
-                    .add_modifier(Modifier::BOLD),
-            ));
+            spans.push(Span::styled("Grok Local  ", product));
+            spans.push(Span::styled(xai_grok_version::LOCAL_VERSION, ver.clone()));
+            spans.push(sep.clone());
+            spans.push(Span::styled("Grok Build  ", product));
             spans.push(Span::styled(
                 format!("{}{}", xai_grok_version::VERSION, channel),
-                Style::default().fg(theme.gray),
+                ver,
             ));
         }
         VersionBadgeMode::HeroFooter => {
@@ -497,16 +499,11 @@ pub(super) fn render_version_badge(
             }
         }
         VersionBadgeMode::HeroInline => {
-            spans.push(Span::styled(
-                "Grok Build  ",
-                Style::default()
-                    .fg(theme.text_primary)
-                    .add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::styled(
-                xai_grok_version::VERSION,
-                Style::default().fg(theme.gray),
-            ));
+            spans.push(Span::styled("Grok Local  ", product));
+            spans.push(Span::styled(xai_grok_version::LOCAL_VERSION, ver.clone()));
+            spans.push(sep.clone());
+            spans.push(Span::styled("Grok Build  ", product));
+            spans.push(Span::styled(xai_grok_version::VERSION, ver));
         }
     }
 
@@ -2688,8 +2685,26 @@ mod tests {
                 "badge must not label the product: {rendered:?}"
             );
         }
+        assert!(full.contains("Grok Local"), "full badge: {full:?}");
         assert!(full.contains("Grok Build"), "full badge: {full:?}");
+        assert!(
+            full.contains(xai_grok_version::LOCAL_VERSION),
+            "full badge local version: {full:?}"
+        );
+        assert!(
+            full.contains(xai_grok_version::VERSION),
+            "full badge grok-build version: {full:?}"
+        );
+        assert!(inline.contains("Grok Local"), "inline badge: {inline:?}");
         assert!(inline.contains("Grok Build"), "inline badge: {inline:?}");
+        assert!(
+            inline.contains(xai_grok_version::LOCAL_VERSION),
+            "inline badge local version: {inline:?}"
+        );
+        assert!(
+            inline.contains(xai_grok_version::VERSION),
+            "inline badge grok-build version: {inline:?}"
+        );
         assert!(footer.contains("acme"), "footer keeps the team: {footer:?}");
         assert!(
             !footer.ends_with('\u{2502}'),

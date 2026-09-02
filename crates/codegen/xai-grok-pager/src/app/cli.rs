@@ -111,9 +111,9 @@ See ~/.grok/README.md for more information.
     Export(crate::export_cmd::ExportArgs),
     /// Export or upload session trace data
     Trace(crate::trace_cmd::TraceArgs),
-    /// Overlay-merge the latest grok-build source without replacing grok-local patches
+    /// Install a grok-local GitHub release, or overlay-merge grok-build with --upstream
     Update {
-        /// Check for grok-build updates without merging.
+        /// Check for updates without installing.
         #[arg(long)]
         check: bool,
         /// Emit machine-readable JSON output (for --check).
@@ -140,6 +140,10 @@ See ~/.grok/README.md for more information.
         /// Internal compat alias for `--trigger=auto_background` (older parents still spawn children with it).
         #[arg(long, hide = true)]
         auto: bool,
+        /// Overlay-merge https://github.com/xai-org/grok-build into the grok-local source tree
+        /// instead of installing a binary from https://github.com/Franzferdinan51/local-grok-cli/releases.
+        #[arg(long)]
+        upstream: bool,
     },
     /// Print version information
     #[command(visible_alias = "v")]

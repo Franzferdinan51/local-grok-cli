@@ -1,0 +1,17 @@
+[
+  {
+    "category": "features",
+    "description": "Startup, `--version`, and `/session-info` show **Grok Local** and **Grok Build** versions together.",
+    "breaking_change": false
+  },
+  {
+    "category": "features",
+    "description": "`grok-local update` installs our GitHub releases; `grok-local update --upstream` overlay-merges xai-org/grok-build without replacing LM Studio, SearxNG, or `~/.grok-local`.",
+    "breaking_change": false
+  },
+  {
+    "category": "features",
+    "description": "Welcome changelog lists Grok Local notes first, then the current Grok Build notes.",
+    "breaking_change": false
+  }
+]

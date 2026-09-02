@@ -42,16 +42,21 @@ version and the grok-build version that overlay was applied on.
 
 ```sh
 grok-local --version
-# grok-local 0.4.0 (<git sha>)
+# grok-local 0.4.1 (<git sha>)
 # grok-build 1.0.16 (<SOURCE_REV>)
 ```
 
-Update from [xai-org/grok-build](https://github.com/xai-org/grok-build) **without**
-replacing fork patches (LM Studio, SearxNG, `~/.grok-local`, `grok-local` binary name):
+Two update paths — official `grok` from x.ai is never installed:
 
 ```sh
+# Install the latest grok-local binary from our GitHub Releases
 grok-local update --check
-grok-local update          # overlay-merge + release rebuild
+grok-local update
+
+# Overlay-merge latest https://github.com/xai-org/grok-build into this tree
+# (keeps LM Studio, SearxNG, ~/.grok-local, grok-local name)
+grok-local update --upstream --check
+grok-local update --upstream
 # or: python3 scripts/sync-upstream.py
 ```
 

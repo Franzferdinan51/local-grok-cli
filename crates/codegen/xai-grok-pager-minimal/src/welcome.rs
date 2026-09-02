@@ -43,7 +43,8 @@ pub fn maybe_commit_welcome(app: &mut AppView, terminal: &mut PagerTerminal) {
     let _ = terminal.clear();
 
     let theme = Theme::current();
-    let version = xai_grok_version::VERSION;
+    let local_version = xai_grok_version::LOCAL_VERSION;
+    let build_version = xai_grok_version::VERSION;
     let (cwd, model) = match &app.active_view {
         ActiveView::Agent(id) => {
             let agent = app.agents.get(id);
@@ -61,12 +62,20 @@ pub fn maybe_commit_welcome(app: &mut AppView, terminal: &mut PagerTerminal) {
     let mut info: Vec<Line<'static>> = Vec::new();
     info.push(Line::from(vec![
         Span::styled(
+            "Grok Local",
+            Style::default()
+                .fg(theme.accent_user)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!("  v{local_version}"), theme.muted()),
+        Span::styled("  │  ", theme.dim()),
+        Span::styled(
             "Grok Build",
             Style::default()
                 .fg(theme.accent_user)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(format!("  v{version}"), theme.muted()),
+        Span::styled(format!("  v{build_version}"), theme.muted()),
     ]));
     if !cwd.is_empty() {
         info.push(Line::from(Span::styled(cwd, theme.muted())));

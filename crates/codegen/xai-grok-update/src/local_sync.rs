@@ -147,7 +147,7 @@ pub fn print_overlay_status(status: &OverlayUpdateStatus, json: bool) -> Result<
     ) {
         (Some(latest), Some(rev)) if status.update_available => {
             println!("A new grok-build snapshot is available: {} -> {latest} ({rev})", status.grok_build);
-            println!("Run `grok-local update` in the source tree to overlay-merge without replacing fork patches.");
+            println!("Run `grok-local update --upstream` in the source tree to overlay-merge without replacing fork patches.");
         }
         (Some(latest), Some(_)) => {
             println!("Already on latest grok-build {latest} (overlay merge).");

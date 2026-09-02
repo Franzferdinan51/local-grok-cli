@@ -2241,6 +2241,7 @@ async fn async_main(args: PagerArgs) -> Result<()> {
                 enterprise,
                 trigger,
                 auto,
+                upstream,
             } => {
                 init_tracing_simple("cli");
                 let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
@@ -2253,6 +2254,7 @@ async fn async_main(args: PagerArgs) -> Result<()> {
                     version,
                     channel_switch,
                     trigger,
+                    upstream,
                     &update_config,
                 )
                 .await;
@@ -2553,32 +2555,43 @@ async fn run_update_command(
     version: Option<String>,
     channel_switch: Option<&str>,
     trigger: auto_update::CliUpdateTrigger,
+    upstream: bool,
     base_update_config: &UpdateConfig,
 ) -> Result<()> {
     if json && !check {
         anyhow::bail!("--json requires --check");
     }
     let _ = (channel_switch, trigger, base_update_config);
-    // grok-local never installs the official grok binary: that would overwrite
-    // LM Studio / SearxNG / ~/.grok-local patches. Updates overlay-merge
-    // github.com/xai-org/grok-build onto this tree.
+    // Never install official grok from x.ai — that would overwrite this fork.
+    // Default: Franzferdinan51/local-grok-cli GitHub Releases.
+    // --upstream: overlay-merge xai-org/grok-build into the source tree.
+    if upstream {
+        if check {
+            if version.is_some() {
+                anyhow::bail!("--version cannot be used with --check --upstream");
+            }
+            let status = xai_grok_update::local_sync::check_overlay_status().await;
+            xai_grok_update::local_sync::print_overlay_status(&status, json)?;
+            return Ok(());
+        }
+        if version.is_some() {
+            anyhow::bail!(
+                "--version pins a grok-local GitHub release. Drop it for --upstream, \
+                 which overlay-merges the latest xai-org/grok-build source."
+            );
+        }
+        xai_grok_update::local_sync::run_overlay_update(true).await?;
+        return Ok(());
+    }
     if check {
         if version.is_some() {
             anyhow::bail!("--version cannot be used with --check");
         }
-        let status = xai_grok_update::local_sync::check_overlay_status().await;
-        xai_grok_update::local_sync::print_overlay_status(&status, json)?;
+        let status = xai_grok_update::fork_release::check_fork_release().await;
+        xai_grok_update::fork_release::print_fork_release_status(&status, json)?;
         return Ok(());
     }
-    if version.is_some() {
-        anyhow::bail!(
-            "grok-local update does not install a specific official grok version.\n\
-             It overlay-merges https://github.com/xai-org/grok-build onto this fork.\n\
-             Drop --version and run `grok-local update` from the source tree."
-        );
-    }
-    let _ = force_reinstall;
-    xai_grok_update::local_sync::run_overlay_update(true).await?;
+    xai_grok_update::fork_release::install_fork_release(version.as_deref(), force_reinstall).await?;
     Ok(())
 }
 /// After a successful `grok update`, ask any running leader on this machine that is older than `installed_version` to relaunch onto the new binary.

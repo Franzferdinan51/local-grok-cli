@@ -8,13 +8,14 @@ This fork tracks [xai-org/grok-build](https://github.com/xai-org/grok-build) wit
 - `scripts/sync-upstream.py` — overlay-preserving sync
 
 ```sh
-# check
-python3 scripts/sync-upstream.py --check
-# or
+# grok-local GitHub Releases (binaries)
 grok-local update --check
-
-# merge grok-build onto this tree, then rebuild grok-local
 grok-local update
+
+# grok-build source overlay (keeps this fork's patches)
+grok-local update --upstream --check
+grok-local update --upstream
+# or: python3 scripts/sync-upstream.py
 ```
 
 Official `curl https://x.ai/cli/install.sh` / `grok update` would replace this binary. Do not use them here.
