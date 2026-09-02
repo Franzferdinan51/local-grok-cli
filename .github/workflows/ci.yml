@@ -9,6 +9,11 @@ on:
 permissions:
   contents: write
 
+# One in-flight run per ref so tag+main piles do not starve the release matrix.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
+
 jobs:
   build:
     name: grok-local (${{ matrix.name }})
@@ -91,7 +96,9 @@ jobs:
           path: dist/${{ matrix.artifact }}
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Publish whatever platforms built. A Windows-only failure used to skip
+    # this job, so /releases kept showing only v0.2.0 after v0.3.x tags.
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/v') && !cancelled() }}
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -99,9 +106,22 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+          # Matrix legs that failed have no artifact; still publish the rest.
+          pattern: grok-local-*
+
+      - name: Require at least one binary
+        run: |
+          shopt -s nullglob
+          files=(artifacts/grok-local-*)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "no grok-local artifacts to publish" >&2
+            exit 1
+          fi
+          ls -lh artifacts/
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*
+          files: artifacts/grok-local-*
           generate_release_notes: true
-          fail_on_unmatched_files: true
+          fail_on_unmatched_files: false
+          make_latest: true
