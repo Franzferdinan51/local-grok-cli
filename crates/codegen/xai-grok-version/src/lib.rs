@@ -11,6 +11,28 @@ pub const VERSION: &str = match option_env!("GROK_VERSION") {
     None => env!("CARGO_PKG_VERSION"),
 };
 
+/// Grok Local fork version. Independent of the grok-build [`VERSION`] we track.
+pub const LOCAL_VERSION: &str = match option_env!("GROK_LOCAL_VERSION") {
+    Some(v) => v,
+    None => "0.4.0",
+};
+
+/// Monorepo SHA recorded in the repo-root `SOURCE_REV` file (grok-build identity).
+pub fn source_rev() -> &'static str {
+    include_str!("../../../../SOURCE_REV").trim()
+}
+
+/// First 12 characters of [`source_rev`], matching grok-build `--version` commit stamps.
+pub fn source_rev_short() -> &'static str {
+    let rev = source_rev();
+    let n = rev
+        .char_indices()
+        .nth(12)
+        .map(|(i, _)| i)
+        .unwrap_or(rev.len());
+    &rev[..n]
+}
+
 /// The release pipeline always injects `GROK_VERSION`; without it the build is from source.
 pub const IS_DEV_BUILD: bool = option_env!("GROK_VERSION").is_none();
 
@@ -91,5 +113,14 @@ mod tests {
         assert_eq!(full_version(), "first (aaaaaaa)");
         set_full_version("second (bbbbbbb)");
         assert_eq!(full_version(), "first (aaaaaaa)");
+    }
+
+    #[test]
+    fn local_and_build_versions_are_distinct_labels() {
+        assert!(!LOCAL_VERSION.is_empty());
+        assert!(!VERSION.is_empty());
+        assert_eq!(source_rev().len(), 40, "SOURCE_REV should be a full git SHA");
+        assert_eq!(source_rev_short().len(), 12);
+        assert!(source_rev().starts_with(source_rev_short()));
     }
 }

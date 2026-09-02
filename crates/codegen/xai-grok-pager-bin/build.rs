@@ -13,9 +13,11 @@ fn git_stdout(args: &[&str]) -> Option<String> {
 
 fn main() {
     println!("cargo:rerun-if-env-changed=GROK_VERSION");
+    println!("cargo:rerun-if-env-changed=GROK_LOCAL_VERSION");
+    println!("cargo:rerun-if-changed=../../../SOURCE_REV");
 
-    // Watch the git files that change on commit/checkout so the version stamp refreshes. Never
-    // emit a missing path: cargo treats it as always dirty and rebuilds this crate every build.
+    // Watch the git files that change on commit/checkout so the version stamp refreshes
+    // Never emit a missing path: cargo treats it as always dirty and rebuilds this crate every build
     let mut watch_paths = Vec::new();
     watch_paths.extend(git_stdout(&["rev-parse", "--git-path", "HEAD"]));
     watch_paths.extend(git_stdout(&["rev-parse", "--git-path", "logs/HEAD"]));
@@ -31,9 +33,16 @@ fn main() {
         .filter(|s| s.len() == 12)
         .unwrap_or_else(|| "unknown".to_string());
 
-    let version = std::env::var("GROK_VERSION")
+    let build_version = std::env::var("GROK_VERSION")
         .or_else(|_| std::env::var("CARGO_PKG_VERSION"))
         .unwrap_or_else(|_| "0.0.0".to_string());
+    let local_version = std::env::var("GROK_LOCAL_VERSION").unwrap_or_else(|_| "0.4.0".to_string());
+    let source_rev = std::fs::read_to_string("../../../SOURCE_REV")
+        .ok()
+        .and_then(|s| s.split_whitespace().next().map(str::to_string))
+        .unwrap_or_else(|| "unknown".to_string());
+    let source_short: String = source_rev.chars().take(12).collect();
 
-    println!("cargo:rustc-env=VERSION_WITH_COMMIT={version} ({commit})");
+    println!("cargo:rustc-env=VERSION_WITH_COMMIT={build_version} ({source_short})");
+    println!("cargo:rustc-env=LOCAL_VERSION_WITH_COMMIT={local_version} ({commit})");
 }

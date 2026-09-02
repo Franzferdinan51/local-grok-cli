@@ -4816,7 +4816,20 @@ fn session_info_fields(
     }
     push(
         "Shell version",
-        xai_grok_version::display_version(xai_grok_update::channel_label()),
+        format!(
+            "grok-local {}{}",
+            xai_grok_version::LOCAL_VERSION,
+            xai_grok_update::channel_label()
+        ),
+        false,
+    );
+    push(
+        "Grok Build",
+        format!(
+            "{} ({})",
+            xai_grok_version::display_version(xai_grok_update::channel_label()),
+            xai_grok_version::source_rev_short()
+        ),
         false,
     );
     push("Session ID", info.session_id.to_string(), false);

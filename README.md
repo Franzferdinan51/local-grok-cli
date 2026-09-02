@@ -36,8 +36,27 @@ Embeddings stay hidden. Set `LM_STUDIO_MODEL` to pick one by id. Web search
 defaults to SearxNG at `http://127.0.0.1:8888` (`SEARXNG_URL`; a trailing
 `/search` is stripped). Do not point this at Open WebUI on `:8080`.
 
-A small `SOURCE_REV` file at the root records the full monorepo commit SHA
-for the version of the code present in this tree.
+A small `SOURCE_REV` file at the root records the grok-build monorepo SHA
+in this tree. `grok-local --version` prints **both** the grok-local fork
+version and the grok-build version that overlay was applied on.
+
+```sh
+grok-local --version
+# grok-local 0.4.0 (<git sha>)
+# grok-build 1.0.16 (<SOURCE_REV>)
+```
+
+Update from [xai-org/grok-build](https://github.com/xai-org/grok-build) **without**
+replacing fork patches (LM Studio, SearxNG, `~/.grok-local`, `grok-local` binary name):
+
+```sh
+grok-local update --check
+grok-local update          # overlay-merge + release rebuild
+# or: python3 scripts/sync-upstream.py
+```
+
+Do not run official `grok update` or `https://x.ai/cli/install.sh` against this
+tree; those install official `grok` and would overwrite this fork.
 
 </div>
 
