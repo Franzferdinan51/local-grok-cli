@@ -100,7 +100,28 @@ fn shine_opacity(diag: f32, secs: f32) -> f32 {
     (pulse + SHINE * shine).clamp(0.0, 1.0)
 }
 
-fn render_into(area: Rect, buf: &mut Buffer, theme: &Theme, logo: &str) {
+/// Galaxy palette for the logo: deep violet space through nebula indigo to cyan starlight.
+/// The optional shine lifts the active sweep toward a pale star-like highlight.
+fn galaxy_color(diag: f32, shine: f32) -> Color {
+    let diag = diag.clamp(0.0, 1.0);
+    let (from, to, t) = if diag < 0.5 {
+        ((28, 18, 72), (54, 30, 112), diag * 2.0)
+    } else {
+        ((54, 30, 112), (18, 92, 126), (diag - 0.5) * 2.0)
+    };
+    let base = Color::Rgb(
+        lerp_channel(from.0, to.0, t),
+        lerp_channel(from.1, to.1, t),
+        lerp_channel(from.2, to.2, t),
+    );
+    blend_color(base, Color::Rgb(220, 232, 255), shine).unwrap_or(base)
+}
+
+fn lerp_channel(from: u8, to: u8, amount: f32) -> u8 {
+    (from as f32 + (to as f32 - from as f32) * amount).round() as u8
+}
+
+fn render_into(area: Rect, buf: &mut Buffer, _theme: &Theme, logo: &str) {
     let lines: Vec<&str> = non_empty_lines(logo).collect();
     let rows = lines.len().max(1) as f32;
     let cols = lines
@@ -111,10 +132,8 @@ fn render_into(area: Rect, buf: &mut Buffer, theme: &Theme, logo: &str) {
         .max(1) as f32;
     let secs = anim_phase_secs();
 
-    // Blend each glyph from the resting gray toward the bright text color by its shine opacity, so a sheen sweeps across the braille art
+    // Blend each glyph through the galaxy palette by its shine opacity, so a sheen sweeps across the braille art.
     // Adjacent glyphs that land on the same blended color share one Span to hold down the per-frame allocation
-    let base = theme.gray;
-    let hilite = theme.text_primary;
     let logo_lines: Vec<Line> = lines
         .iter()
         .enumerate()
@@ -125,7 +144,7 @@ fn render_into(area: Rect, buf: &mut Buffer, theme: &Theme, logo: &str) {
             for (col, ch) in line.chars().enumerate() {
                 // Sweep along the diagonal from bottom-left to top-right: the coordinate grows as col increases and row decreases
                 let diag = (col as f32 + (rows - 1.0 - row as f32)) / (cols + rows);
-                let color = blend_color(base, hilite, shine_opacity(diag, secs)).unwrap_or(base);
+                let color = galaxy_color(diag, shine_opacity(diag, secs));
                 if run_color != Some(color) {
                     if let Some(prev) = run_color {
                         spans.push(Span::styled(
@@ -289,6 +308,14 @@ mod tests {
         let late = brightest(0.7);
         assert!(early < mid, "early {early} should precede mid {mid}");
         assert!(mid < late, "mid {mid} should precede late {late}");
+    }
+
+    #[test]
+    fn galaxy_gradient_moves_through_space_colors() {
+        assert_eq!(galaxy_color(0.0, 0.0), Color::Rgb(28, 18, 72));
+        assert_eq!(galaxy_color(0.5, 0.0), Color::Rgb(54, 30, 112));
+        assert_eq!(galaxy_color(1.0, 0.0), Color::Rgb(18, 92, 126));
+        assert_ne!(galaxy_color(0.2, 0.0), galaxy_color(0.8, 0.0));
     }
 
     #[test]

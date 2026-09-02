@@ -1,4 +1,4 @@
-# Grok Local 0.4.1
+# Grok Local 0.4.2
 
 ## Features
 
