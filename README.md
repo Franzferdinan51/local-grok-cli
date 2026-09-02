@@ -80,9 +80,18 @@ cargo build -p xai-grok-pager-bin --release
 ./target/release/grok-local --version          # Windows: target\release\grok-local.exe
 ```
 
-Put `target/release` (or a copy of `grok-local`) on your `PATH`. Config still
-lives in `~/.grok-local` (`%USERPROFILE%\.grok-local` on Windows), override
-with `$GROK_HOME`.
+Install the built Unix binary without replacing the official `grok` command:
+
+```sh
+./scripts/install.sh
+# or: GROK_LOCAL_INSTALL_DIR=/some/bin ./scripts/install.sh
+```
+
+The installer writes only `grok-local` (by default to `~/.local/bin`) and never
+creates, replaces, or redirects `grok`. Put `target/release` (or a copy of
+`grok-local`) on your `PATH` manually on Windows. Config still lives in
+`~/.grok-local` (`%USERPROFILE%\.grok-local` on Windows), override with
+`$GROK_HOME`.
 
 ## Building from source
 
