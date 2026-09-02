@@ -434,7 +434,7 @@ pub async fn is_version_cache_fresh() -> bool {
 pub use xai_grok_version::installed as get_installed_grok_version;
 
 /// Version of the managed grok binary currently on disk, read from the
-/// `~/.grok/bin/grok` symlink target (`../downloads/grok-<version>-<platform>`)
+/// `~/.grok-local/bin/grok-local` symlink target (`../downloads/grok-<version>-<platform>`)
 /// without exec'ing anything.
 ///
 /// Concurrent updaters (TUI background download, leader hourly checker, explicit `grok update`) decide staleness from this.

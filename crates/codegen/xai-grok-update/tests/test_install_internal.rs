@@ -94,19 +94,19 @@ async fn install_internal_pinned_version_writes_binary_and_symlink() {
     assert!(downloaded.exists(), "binary downloaded: {downloaded:?}");
     assert_eq!(std::fs::read(&downloaded).unwrap(), b"#!/bin/sh\nexit 0\n");
 
-    let symlink = home.join("bin").join("grok");
-    assert!(symlink.is_symlink(), "grok symlink created");
+    let symlink = home.join("bin").join("grok-local");
+    assert!(symlink.is_symlink(), "grok-local symlink created");
     let target = std::fs::read_link(&symlink).unwrap();
     assert_eq!(
         target.file_name().unwrap(),
         format!("grok-0.1.181-{platform}").as_str()
     );
 
-    // `grok` and `agent` move together; see `swap_managed_bin_links`
+    // `grok-local` and `agent` move together; see `swap_managed_bin_links`
     let agent_link = home.join("bin").join("agent");
     assert!(agent_link.is_symlink(), "agent symlink created");
     let agent_target = std::fs::read_link(&agent_link).unwrap();
-    assert_eq!(agent_target, target, "agent and grok point at same target");
+    assert_eq!(agent_target, target, "agent and grok-local point at same target");
 }
 
 /// Regression: pre-existing `agent` symlink from a prior install must be swapped to the new version, not left stale (the original bug).
@@ -445,7 +445,7 @@ async fn install_internal_cleans_up_old_versions_keeping_n_minus_one() {
         "oldest deleted"
     );
 
-    let target = std::fs::read_link(home.join("bin").join("grok")).unwrap();
+    let target = std::fs::read_link(home.join("bin").join("grok-local")).unwrap();
     assert!(
         target
             .file_name()
@@ -487,7 +487,7 @@ async fn install_internal_idempotent_for_same_version() {
     .unwrap();
 
     assert_eq!(first, second);
-    let target = std::fs::read_link(test_home().join("bin").join("grok")).unwrap();
+    let target = std::fs::read_link(test_home().join("bin").join("grok-local")).unwrap();
     assert!(target.to_string_lossy().contains("0.1.181"));
 }
 

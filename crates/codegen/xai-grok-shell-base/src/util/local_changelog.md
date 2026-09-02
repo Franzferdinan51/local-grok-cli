@@ -1,3 +1,7 @@
+# Grok Local 0.4.8
+
+- Fixed internal updater activation and rollback paths to manage `grok-local` separately from the official `grok` command.
+
 # Grok Local 0.4.7
 
 - Added a safe installer that installs only `grok-local` and leaves the official `grok` command unchanged.

@@ -1544,7 +1544,7 @@ async fn smoke_test_binary(binary_path: &std::path::Path) -> Result<(), SmokeTes
 
 /// Test-only entry point: same as [`install_internal`] but reads from
 /// `gcs_base_url` instead of the hardcoded GCS bucket. Persists installer
-/// config and writes to `~/.grok/bin/`, so callers must isolate
+/// config and writes to `~/.grok-local/bin/`, so callers must isolate
 /// `GROK_HOME`.
 #[doc(hidden)]
 pub async fn install_internal_from_base(
@@ -1625,7 +1625,7 @@ async fn activate_verified_download(download: &VerifiedDownload) -> Result<()> {
     let bin_dir = grok_home.join("bin");
     tokio::fs::create_dir_all(&bin_dir).await?;
 
-    // Atomic swap of ~/.grok/bin/{grok,agent} -> downloaded binary.
+    // Atomic swap of ~/.grok-local/bin/{grok-local,agent} -> downloaded binary.
     let link_path = swap_managed_bin_links(&download.binary_path, &bin_dir).await?;
 
     remove_stale_pager(&bin_dir).await;
@@ -1711,11 +1711,11 @@ fn relative_symlink_target(target: &std::path::Path, link: &std::path::Path) -> 
     target.to_path_buf()
 }
 
-/// Swap `~/.grok/bin/{grok,agent}` to point at `binary_path`. Returns the
-/// `grok` link path (for [`regenerate_completions`]).
+/// Swap `~/.grok-local/bin/{grok-local,agent}` to point at `binary_path`. Returns the
+/// `grok-local` link path (for [`regenerate_completions`]).
 ///
 /// The bootstrap installers (`install.sh`, `install.ps1`, `install-enterprise.sh`) maintain `grok` and `agent` in lockstep, and so must the updater.
-/// Otherwise `grok update` leaves `agent` pinned at the previous version.
+/// Otherwise `grok-local update` leaves `agent` pinned at the previous version.
 ///
 /// Unix: atomic symlink swap with relative target (survives Docker
 /// bind-mounts of `~/.grok/`). Windows: [`windows_replace_exe`].
@@ -1729,7 +1729,11 @@ async fn swap_managed_bin_links(
     binary_path: &std::path::Path,
     bin_dir: &std::path::Path,
 ) -> Result<std::path::PathBuf> {
-    let grok_name = if cfg!(windows) { "grok.exe" } else { "grok" };
+    let grok_name = if cfg!(windows) {
+        "grok-local.exe"
+    } else {
+        "grok-local"
+    };
     let agent_name = if cfg!(windows) { "agent.exe" } else { "agent" };
     let grok_link = bin_dir.join(grok_name);
     let agent_link = bin_dir.join(agent_name);

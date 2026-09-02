@@ -111,7 +111,7 @@ async fn internal_install_stable_rollback_0_2_7_to_0_2_5() {
         .join(format!("grok-0.2.5-{platform}"));
     assert!(downloaded.exists(), "rolled-back binary must be downloaded");
 
-    let symlink = home.join("bin").join("grok");
+    let symlink = home.join("bin").join("grok-local");
     let target = std::fs::read_link(&symlink).unwrap();
     assert!(
         target.to_string_lossy().contains("0.2.5"),
@@ -133,7 +133,7 @@ async fn internal_install_stable_upgrade_0_2_5_to_0_2_7() {
         .await
         .unwrap();
 
-    let symlink = test_home().join("bin").join("grok");
+    let symlink = test_home().join("bin").join("grok-local");
     let target = std::fs::read_link(&symlink).unwrap();
     assert!(target.to_string_lossy().contains("0.2.7"));
 }
@@ -158,7 +158,7 @@ async fn internal_install_rollback_then_upgrade_sequence() {
             .unwrap();
     }
 
-    let target = std::fs::read_link(test_home().join("bin").join("grok")).unwrap();
+    let target = std::fs::read_link(test_home().join("bin").join("grok-local")).unwrap();
     assert!(
         target.to_string_lossy().contains("0.2.8"),
         "final symlink must point to 0.2.8: {target:?}"
@@ -442,7 +442,7 @@ async fn auto_update_target_npm_rollback_returns_none() {
 // A binary another process already installed is never downloaded a second time, but a stale running process still gets the relaunch signal
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Lay down what `install_internal_from_base` produces in the test GROK_HOME: `bin/grok -> ../downloads/grok-<version>-<platform>`.
+/// Lay down what `install_internal_from_base` produces in the test GROK_HOME: `bin/grok-local -> ../downloads/grok-<version>-<platform>`.
 fn fake_managed_install(version: &str) {
     let home = test_home();
     let downloads = home.join("downloads");
@@ -453,7 +453,7 @@ fn fake_managed_install(version: &str) {
     std::fs::write(downloads.join(&name), b"#!/bin/sh\nexit 0\n").unwrap();
     std::os::unix::fs::symlink(
         std::path::Path::new("../downloads").join(&name),
-        bin.join("grok"),
+        bin.join("grok-local"),
     )
     .unwrap();
 }
@@ -584,7 +584,7 @@ async fn internal_install_double_rollback() {
             .await
             .unwrap();
 
-        let target = std::fs::read_link(test_home().join("bin").join("grok")).unwrap();
+        let target = std::fs::read_link(test_home().join("bin").join("grok-local")).unwrap();
         assert!(
             target.to_string_lossy().contains(version),
             "symlink must point to {version} after install: {target:?}"
