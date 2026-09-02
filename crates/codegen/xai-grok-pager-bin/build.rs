@@ -36,7 +36,7 @@ fn main() {
     let build_version = std::env::var("GROK_VERSION")
         .or_else(|_| std::env::var("CARGO_PKG_VERSION"))
         .unwrap_or_else(|_| "0.0.0".to_string());
-    let local_version = std::env::var("GROK_LOCAL_VERSION").unwrap_or_else(|_| "0.4.2".to_string());
+    let local_version = std::env::var("GROK_LOCAL_VERSION").unwrap_or_else(|_| "0.4.3".to_string());
     let source_rev = std::fs::read_to_string("../../../SOURCE_REV")
         .ok()
         .and_then(|s| s.split_whitespace().next().map(str::to_string))

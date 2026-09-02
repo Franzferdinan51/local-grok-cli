@@ -51,6 +51,13 @@ fn strip_v(tag: &str) -> &str {
     tag.strip_prefix('v').unwrap_or(tag)
 }
 
+fn release_is_newer(current: &str, latest: &str) -> bool {
+    match (semver::Version::parse(current), semver::Version::parse(latest)) {
+        (Ok(current), Ok(latest)) => latest > current,
+        _ => current != latest,
+    }
+}
+
 fn api_client() -> Result<reqwest::Client> {
     Ok(reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -92,7 +99,7 @@ pub async fn check_fork_release() -> ForkReleaseStatus {
             let (os, arch) = detect_platform().unwrap_or(("linux", "x86_64"));
             let want = artifact_name(os, arch).ok();
             ForkReleaseStatus {
-                update_available: latest != grok_local,
+                update_available: release_is_newer(&grok_local, &latest),
                 latest_grok_local: Some(latest),
                 latest_release_url: Some(rel.html_url),
                 asset: want,
@@ -249,5 +256,12 @@ mod tests {
     fn release_tags_accept_v_prefix_or_plain_versions() {
         assert_eq!(strip_v("v0.4.1"), "0.4.1");
         assert_eq!(strip_v("0.4.1"), "0.4.1");
+    }
+
+    #[test]
+    fn release_check_never_offers_a_downgrade() {
+        assert!(!release_is_newer("0.4.2", "0.4.0"));
+        assert!(!release_is_newer("0.4.2", "0.4.2"));
+        assert!(release_is_newer("0.4.1", "0.4.2"));
     }
 }
