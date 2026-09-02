@@ -109,8 +109,10 @@ pub fn find_protoc() -> anyhow::Result<Option<PathBuf>> {
     }
 
     // 3. Try protoc from PATH (system install or other tooling).
-    if check_protoc_good(Path::new("protoc")).is_ok() {
-        return Ok(Some(PathBuf::from("protoc")));
+    for name in ["protoc", "protoc.exe"] {
+        if check_protoc_good(Path::new(name)).is_ok() {
+            return Ok(Some(PathBuf::from(name)));
+        }
     }
 
     // 4. Not found anywhere.

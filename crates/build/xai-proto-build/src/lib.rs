@@ -2,9 +2,10 @@ mod debug_redact;
 pub mod find_protoc;
 
 use anyhow::Context;
+use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::{fs, iter};
 
 /// Find the protoc well-known types include directory.
 ///
@@ -142,11 +143,18 @@ impl XaiProtoBuilder {
         }
 
         // Can only process one input file when using --dependency_out=FILE.
+        // Do not use /dev/stdout or /dev/null: those paths do not exist on Windows
+        // (CI failed with `protoc: /dev/stdout: No such file or directory`).
+        let scratch = env::var_os("OUT_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
         for proto in protos {
+            let dep_path = scratch.join("xai-proto-deps.d");
+            let desc_path = scratch.join("xai-proto-desc.bin");
             let mut command = Command::new(protoc.unwrap_or(Path::new("protoc")));
             command
-                .arg("--dependency_out=/dev/stdout")
-                .arg("--descriptor_set_out=/dev/null");
+                .arg(format!("--dependency_out={}", dep_path.display()))
+                .arg(format!("--descriptor_set_out={}", desc_path.display()));
 
             // Add protoc's well-known types include directory first (if found).
             // This is needed for Bazel sandboxed builds where protoc and its
@@ -167,27 +175,32 @@ impl XaiProtoBuilder {
             command.stdin(Stdio::null());
             command.stderr(Stdio::inherit());
 
-            let output = command.output().context("protoc command failed")?;
-            if !output.status.success() {
+            let status = command.status().context("protoc command failed")?;
+            if !status.success() {
                 return Err(anyhow::anyhow!("protoc command failed"));
             }
 
-            let output =
-                String::from_utf8(output.stdout).context("protoc command output not UTF-8")?;
-
-            let mut lines = output.lines();
-            let first_line = lines.next().context("protoc command output is empty")?;
-            let prefix = "/dev/null:";
-            let rem = first_line.strip_prefix(prefix).with_context(|| {
-                format!("protoc command output must start with /dev/null: {output:?}")
+            let output = fs::read_to_string(&dep_path).with_context(|| {
+                format!("protoc --dependency_out missing: {}", dep_path.display())
             })?;
-            for line in iter::once(rem).chain(lines) {
+
+            let rem = output
+                .split_once(':')
+                .map(|(_, rest)| rest)
+                .with_context(|| {
+                    format!("protoc dependency file must contain a target: {output:?}")
+                })?;
+            for line in rem.lines() {
                 let line = line.trim();
-                let line = line.strip_suffix("\\").unwrap_or(line);
+                let line = line.strip_suffix('\\').unwrap_or(line).trim();
+                if line.is_empty() {
+                    continue;
+                }
                 // Depending on absolute paths like
                 // /Users/user/homebrew/Cellar/protobuf/29.1/include/google/protobuf/timestamp.proto
                 // is valid, but we want to have output more deterministic.
-                if line.contains("/include/google/protobuf/") {
+                let slashy = line.replace('\\', "/");
+                if slashy.contains("/include/google/protobuf/") {
                     continue;
                 }
 
