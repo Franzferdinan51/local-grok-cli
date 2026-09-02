@@ -1,4 +1,6 @@
-# Grok Local 0.4.3
+# Grok Local 0.4.4
+
+- Auto-update now keeps xAI upstream checks separate from local fork releases. `grok-local` automatically updates only from the local fork, while upstream source changes remain available through `grok-local update --upstream`.
 
 ## Features
 

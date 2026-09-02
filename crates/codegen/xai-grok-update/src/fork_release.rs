@@ -52,10 +52,37 @@ fn strip_v(tag: &str) -> &str {
 }
 
 fn release_is_newer(current: &str, latest: &str) -> bool {
-    match (semver::Version::parse(current), semver::Version::parse(latest)) {
+    match (
+        semver::Version::parse(current),
+        semver::Version::parse(latest),
+    ) {
         (Ok(current), Ok(latest)) => latest > current,
         _ => current != latest,
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutomaticUpdateSource {
+    ForkRelease,
+    UpstreamInstaller,
+}
+
+pub fn automatic_update_source(executable_name: &str) -> AutomaticUpdateSource {
+    if executable_name == "grok-local" || executable_name == "grok-local.exe" {
+        AutomaticUpdateSource::ForkRelease
+    } else {
+        AutomaticUpdateSource::UpstreamInstaller
+    }
+}
+
+/// Update the active fork binary without routing it through xAI's installer.
+pub async fn run_fork_auto_update_if_available() -> Result<bool> {
+    let status = check_fork_release().await;
+    if !status.update_available {
+        return Ok(false);
+    }
+    install_fork_release(None, false).await?;
+    Ok(true)
 }
 
 fn api_client() -> Result<reqwest::Client> {
@@ -135,16 +162,23 @@ pub fn print_fork_release_status(status: &ForkReleaseStatus, json: bool) -> Resu
     }
     match status.latest_grok_local.as_deref() {
         Some(latest) if status.update_available => {
-            println!("A new grok-local GitHub release is available: {} -> {latest}", status.grok_local);
+            println!(
+                "A new grok-local GitHub release is available: {} -> {latest}",
+                status.grok_local
+            );
             if let Some(url) = status.latest_release_url.as_deref() {
                 println!("{url}");
             }
             println!("Run `grok-local update` to install it.");
-            println!("Run `grok-local update --upstream` to overlay-merge xai-org/grok-build instead.");
+            println!(
+                "Run `grok-local update --upstream` to overlay-merge xai-org/grok-build instead."
+            );
         }
         Some(latest) => {
             println!("Already on latest grok-local GitHub release ({latest}).");
-            println!("Use `grok-local update --upstream` to overlay-merge the latest grok-build source.");
+            println!(
+                "Use `grok-local update --upstream` to overlay-merge the latest grok-build source."
+            );
         }
         None => {}
     }
@@ -263,5 +297,21 @@ mod tests {
         assert!(!release_is_newer("0.4.2", "0.4.0"));
         assert!(!release_is_newer("0.4.2", "0.4.2"));
         assert!(release_is_newer("0.4.1", "0.4.2"));
+    }
+
+    #[test]
+    fn local_binary_uses_fork_releases_for_automatic_updates() {
+        assert_eq!(
+            automatic_update_source("grok-local"),
+            AutomaticUpdateSource::ForkRelease
+        );
+        assert_eq!(
+            automatic_update_source("grok-local.exe"),
+            AutomaticUpdateSource::ForkRelease
+        );
+        assert_eq!(
+            automatic_update_source("grok"),
+            AutomaticUpdateSource::UpstreamInstaller
+        );
     }
 }

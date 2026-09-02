@@ -14,7 +14,7 @@ pub const VERSION: &str = match option_env!("GROK_VERSION") {
 /// Grok Local fork version. Independent of the grok-build [`VERSION`] we track.
 pub const LOCAL_VERSION: &str = match option_env!("GROK_LOCAL_VERSION") {
     Some(v) => v,
-    None => "0.4.3",
+    None => "0.4.4",
 };
 
 /// Monorepo SHA recorded in the repo-root `SOURCE_REV` file (grok-build identity).
@@ -119,7 +119,11 @@ mod tests {
     fn local_and_build_versions_are_distinct_labels() {
         assert!(!LOCAL_VERSION.is_empty());
         assert!(!VERSION.is_empty());
-        assert_eq!(source_rev().len(), 40, "SOURCE_REV should be a full git SHA");
+        assert_eq!(
+            source_rev().len(),
+            40,
+            "SOURCE_REV should be a full git SHA"
+        );
         assert_eq!(source_rev_short().len(), 12);
         assert!(source_rev().starts_with(source_rev_short()));
     }

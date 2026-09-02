@@ -1187,14 +1187,7 @@ async fn run_agent_command(
             )
         );
         if should_check_for_updates(no_auto_update) {
-            auto_update::run_update_if_available(
-                auto_update::UpdateRunMode::NonBlocking,
-                false,
-                auto_update::CliUpdateTrigger::AutoBackground,
-                update_config,
-            )
-            .await
-            .ok();
+            run_auto_update_for_active_binary(no_auto_update, update_config).await;
         }
     }
     let remote_settings = if had_prefetch {
@@ -1307,14 +1300,7 @@ async fn run_agent_command(
     ) {
         let update_config = update_config.clone();
         tokio::spawn(async move {
-            auto_update::run_update_if_available(
-                auto_update::UpdateRunMode::NonBlocking,
-                false,
-                auto_update::CliUpdateTrigger::AutoBackground,
-                &update_config,
-            )
-            .await
-            .ok();
+            run_auto_update_for_active_binary(false, &update_config).await;
         });
     } else if is_stdio && !use_leader && !managed_install {
         tracing::debug!("stdio auto-update skipped: not the managed install");
@@ -1874,10 +1860,7 @@ fn version_text(channel_label: &str) -> String {
         "grok-local {}{}\ngrok-build {}\n",
         env!("LOCAL_VERSION_WITH_COMMIT"),
         channel_label,
-        xai_grok_version::display_version_with_commit(
-            env!("VERSION_WITH_COMMIT"),
-            channel_label,
-        )
+        xai_grok_version::display_version_with_commit(env!("VERSION_WITH_COMMIT"), channel_label,)
     )
 }
 fn write_version(writer: &mut impl std::io::Write, channel_label: &str) -> std::io::Result<()> {
@@ -2491,6 +2474,50 @@ fn should_check_for_updates(no_auto_update_flag: bool) -> bool {
     !std::env::var_os("GROK_DISABLE_AUTOUPDATER")
         .is_some_and(|v| env_flag_enabled(&v.to_string_lossy()))
 }
+
+async fn run_auto_update_for_active_binary(
+    no_auto_update_flag: bool,
+    update_config: &UpdateConfig,
+) {
+    let executable_name = std::env::current_exe()
+        .ok()
+        .and_then(|path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .unwrap_or_default();
+    match xai_grok_update::fork_release::automatic_update_source(&executable_name) {
+        xai_grok_update::fork_release::AutomaticUpdateSource::ForkRelease => {
+            if no_auto_update_flag {
+                return;
+            }
+            tokio::spawn(async {
+                if let Err(error) =
+                    xai_grok_update::fork_release::run_fork_auto_update_if_available().await
+                {
+                    tracing::debug!(%error, "fork auto-update check failed");
+                }
+                let upstream = xai_grok_update::local_sync::check_overlay_status().await;
+                if upstream.update_available {
+                    tracing::info!(
+                        latest = ?upstream.latest_grok_build,
+                        "upstream grok-build source update available; run `grok-local update --upstream`"
+                    );
+                }
+            });
+        }
+        xai_grok_update::fork_release::AutomaticUpdateSource::UpstreamInstaller => {
+            auto_update::run_update_if_available(
+                auto_update::UpdateRunMode::NonBlocking,
+                false,
+                auto_update::CliUpdateTrigger::AutoBackground,
+                update_config,
+            )
+            .await
+            .ok();
+        }
+    }
+}
 /// Gate for the stdio agent's background auto-update: only the direct stdio agent, from the managed install.
 /// Other modes update in `run_agent_command`.
 fn stdio_auto_update_enabled(
@@ -2591,7 +2618,8 @@ async fn run_update_command(
         xai_grok_update::fork_release::print_fork_release_status(&status, json)?;
         return Ok(());
     }
-    xai_grok_update::fork_release::install_fork_release(version.as_deref(), force_reinstall).await?;
+    xai_grok_update::fork_release::install_fork_release(version.as_deref(), force_reinstall)
+        .await?;
     Ok(())
 }
 /// After a successful `grok update`, ask any running leader on this machine that is older than `installed_version` to relaunch onto the new binary.
