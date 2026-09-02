@@ -1,4 +1,6 @@
-# Grok Local 0.4.6
+# Grok Local 0.4.7
+
+- Added a safe installer that installs only `grok-local` and leaves the official `grok` command unchanged.
 
 - Added pre-install safety checks: SHA-256 verification, free-space validation, update locking, executable health checks, atomic replacement, previous-binary backups, rollback support, release-note preview, and dry-run support.
 
