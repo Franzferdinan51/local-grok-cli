@@ -33,7 +33,8 @@ Inference defaults to **LM Studio** at `http://127.0.0.1:1234/v1`. The model
 picker lists chat models LM Studio exposes (`GET /api/v0/models`, then
 `/v1/models`): loaded llms/vlms first, then the rest of the downloaded library.
 Embeddings stay hidden. Set `LM_STUDIO_MODEL` to pick one by id. Web search
-defaults to SearxNG at `http://127.0.0.1:8080` (`SEARXNG_URL`).
+defaults to SearxNG at `http://127.0.0.1:8888` (`SEARXNG_URL`; a trailing
+`/search` is stripped). Do not point this at Open WebUI on `:8080`.
 
 A small `SOURCE_REV` file at the root records the full monorepo commit SHA
 for the version of the code present in this tree.
@@ -64,9 +65,11 @@ with `$GROK_HOME`.
 Requirements:
 
 - **Rust** — the toolchain is pinned by [`rust-toolchain.toml`](rust-toolchain.toml);
-  `rustup` installs it automatically on first build. The host target (including
-  `aarch64-apple-darwin`, `x86_64-apple-darwin`, and `*-pc-windows-msvc`) is
-  added by rustup; extra Linux triples in that file are for Linux CI only.
+  `rustup` installs it automatically on first build. On a Mac, rustup adds the
+  **host** triple: `aarch64-apple-darwin` on Apple Silicon (M1, M2, M3, M4, M5
+  including Pro / Max / Ultra — there is no separate M5 target) or
+  `x86_64-apple-darwin` on Intel. Extra Linux triples in that file are for
+  Linux CI only.
 - **[DotSlash](https://dotslash-cli.com)** — required so hermetic tools under
   [`bin/`](bin/) (notably [`bin/protoc`](bin/protoc)) can download and run.
   Install it and ensure `dotslash` is on your `PATH` **before** building:
@@ -82,9 +85,12 @@ Requirements:
   DotSlash wrapper cannot be executed, install `protoc` on `PATH` or set
   `$PROTOC` / `%PROTOC%` to `protoc.exe`. Windows ARM64 has no protobuf 29.3
   zip in this wrapper; use a PATH `protoc`.
-- Linux, macOS, and Windows x64 are supported build hosts. Kernel sandboxing
-  (Landlock / Seatbelt) is Unix-only; Windows runs with the same process-level
-  helpers grok-build uses there.
+- Supported build hosts: Linux (x86_64 / aarch64), **Apple Silicon macOS**
+  (`aarch64-apple-darwin`, M1–M5), Intel macOS (`x86_64-apple-darwin`), and
+  Windows x64. Kernel sandboxing (Landlock / Seatbelt) is Unix-only; Windows
+  runs with the same process-level helpers grok-build uses there. Native Apple
+  Silicon builds are preferred; a Rosetta x86_64 process is detected and the
+  updater installs arm64 instead.
 
 ```sh
 cargo run -p xai-grok-pager-bin              # build + launch the TUI

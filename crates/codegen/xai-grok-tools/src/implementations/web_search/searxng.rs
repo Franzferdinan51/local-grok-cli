@@ -1,8 +1,9 @@
 //! Local SearxNG search backend.
 //!
 //! Grok Local talks to a user-run SearxNG instance (default
-//! `http://127.0.0.1:8080`) instead of xAI's hosted `/responses` web_search
-//! tool, so search works without an xAI API key.
+//! `http://127.0.0.1:8888`) instead of xAI's hosted `/responses` web_search
+//! tool, so search works without an xAI API key. `:8080` is often Open WebUI
+//! on this host, which returns HTML and used to break JSON parsing.
 
 use std::time::Duration;
 
@@ -11,18 +12,29 @@ use url::Url;
 /// Env vars checked (first non-empty wins) before the compiled-in default.
 const SEARXNG_URL_ENV: &[&str] = &["SEARXNG_URL", "GROK_SEARXNG_URL"];
 
-/// Default local SearxNG bind used by this machine's AISearch compose file.
-pub const DEFAULT_SEARXNG_URL: &str = "http://127.0.0.1:8080";
+/// Default local SearxNG origin (JSON at `{origin}/search?format=json`).
+pub const DEFAULT_SEARXNG_URL: &str = "http://127.0.0.1:8888";
 
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(8);
 
-/// Resolved SearxNG base URL: `SEARXNG_URL` / `GROK_SEARXNG_URL`, else localhost.
+/// Strip a trailing `/search` so `SEARXNG_URL=http://127.0.0.1:8888/search`
+/// still hits `/search` once, not `/search/search`.
+pub fn normalize_searxng_base(raw: &str) -> String {
+    let mut s = raw.trim().trim_end_matches('/').to_string();
+    if s.len() >= 7 && s.to_ascii_lowercase().ends_with("/search") {
+        s.truncate(s.len() - "/search".len());
+        s = s.trim_end_matches('/').to_string();
+    }
+    s
+}
+
+/// Resolved SearxNG origin: `SEARXNG_URL` / `GROK_SEARXNG_URL`, else localhost:8888.
 pub fn default_searxng_url() -> String {
     for name in SEARXNG_URL_ENV {
         if let Ok(value) = std::env::var(name) {
             let trimmed = value.trim();
             if !trimmed.is_empty() {
-                return trimmed.trim_end_matches('/').to_string();
+                return normalize_searxng_base(trimmed);
             }
         }
     }
@@ -36,9 +48,20 @@ pub fn is_searxng_endpoint(base_url: &str, model: &str) -> bool {
     }
     let lower = base_url.to_ascii_lowercase();
     lower.contains("searx")
+        || lower.contains("127.0.0.1:8888")
+        || lower.contains("localhost:8888")
+        || lower.contains("[::1]:8888")
         || lower.contains("127.0.0.1:8080")
         || lower.contains("localhost:8080")
         || lower.contains("[::1]:8080")
+}
+
+/// True when a successful HTTP body is HTML (Open WebUI, a search form, …).
+pub fn body_looks_like_html(body: &str) -> bool {
+    let t = body.trim_start();
+    t.starts_with('<')
+        || t.to_ascii_lowercase().starts_with("<!doctype html")
+        || t.to_ascii_lowercase().contains("<html")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,7 +163,7 @@ pub fn search_timeout() -> Duration {
 }
 
 pub fn search_url(base_url: &str) -> String {
-    format!("{}/search", base_url.trim_end_matches('/'))
+    format!("{}/search", normalize_searxng_base(base_url))
 }
 
 #[cfg(test)]
@@ -149,15 +172,35 @@ mod tests {
 
     #[test]
     fn default_url_is_localhost_searxng() {
-        assert_eq!(DEFAULT_SEARXNG_URL, "http://127.0.0.1:8080");
+        assert_eq!(DEFAULT_SEARXNG_URL, "http://127.0.0.1:8888");
+    }
+
+    #[test]
+    fn strips_trailing_search_path() {
+        assert_eq!(
+            normalize_searxng_base("http://127.0.0.1:8888/search"),
+            "http://127.0.0.1:8888"
+        );
+        assert_eq!(
+            search_url("http://127.0.0.1:8888/search/"),
+            "http://127.0.0.1:8888/search"
+        );
     }
 
     #[test]
     fn detects_searxng_by_model_and_url() {
         assert!(is_searxng_endpoint("https://api.x.ai/v1", "searxng"));
+        assert!(is_searxng_endpoint("http://127.0.0.1:8888", "anything"));
         assert!(is_searxng_endpoint("http://127.0.0.1:8080", "anything"));
         assert!(is_searxng_endpoint("http://searxng:8080", "web"));
         assert!(!is_searxng_endpoint("https://api.x.ai/v1", "grok-4"));
+    }
+
+    #[test]
+    fn html_bodies_are_detected() {
+        assert!(body_looks_like_html("<!doctype html><html>"));
+        assert!(body_looks_like_html("  <html lang=en>"));
+        assert!(!body_looks_like_html("{\"results\":[]}"));
     }
 
     #[test]
@@ -211,6 +254,9 @@ mod tests {
         let rendered = format_searxng_results("zig", &hits);
         assert!(rendered.contains("https://ziglang.org/"), "{rendered}");
         assert!(rendered.contains("[Zig]"), "{rendered}");
-        assert!(rendered.contains("The Zig programming language"), "{rendered}");
+        assert!(
+            rendered.contains("The Zig programming language"),
+            "{rendered}"
+        );
     }
 }

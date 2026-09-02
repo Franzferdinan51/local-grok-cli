@@ -14,5 +14,9 @@ profile = "default" # this will override global preferred profile if such is set
 targets = [
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",
-] # host target will be added automatically
+]
+# rustup always adds the *host* triple. On Apple Silicon that is
+# aarch64-apple-darwin (M1–M5 Pro/Max/Ultra). On Intel Mac it is
+# x86_64-apple-darwin. Do not list those here: they would be downloaded on
+# every Linux checkout.
 # force CI

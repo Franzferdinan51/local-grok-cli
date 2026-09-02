@@ -363,33 +363,34 @@ impl WebSearchClient {
             .http
             .get(&url)
             .query(&[("q", query), ("format", "json")])
+            .header(reqwest::header::ACCEPT, "application/json")
             .timeout(super::searxng::search_timeout())
             .send()
             .await
             .map_err(|e| {
                 err(format!(
-                    "SearxNG at {url} is unreachable ({e}). Start local SearxNG or set SEARXNG_URL."
+                    "SearxNG at {url} is unreachable ({e}). Start local SearxNG or set SEARXNG_URL (e.g. http://127.0.0.1:8888)."
                 ))
             })?;
         let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Failed to read error body".to_string());
         if !status.is_success() {
-            let body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Failed to read error body".to_string());
             return Err(err(format!("SearxNG returned {status}: {body}")));
         }
-        let value: serde_json::Value = response.json().await.map_err(|e| {
-            err(format!("Failed to parse SearxNG JSON: {e}"))
-        })?;
+        if super::searxng::body_looks_like_html(&body) {
+            return Err(err(format!(
+                "SearxNG at {url} returned HTML, not JSON (often Open WebUI on :8080). Set SEARXNG_URL to the SearxNG origin, e.g. http://127.0.0.1:8888"
+            )));
+        }
+        let value: serde_json::Value = serde_json::from_str(&body)
+            .map_err(|e| err(format!("Failed to parse SearxNG JSON from {url}: {e}")))?;
         let hits: Vec<_> = super::searxng::parse_searxng_results(&value)
             .into_iter()
             .filter(|hit| {
-                super::searxng::domain_permitted(
-                    &hit.url,
-                    allowed.as_deref(),
-                    excluded.as_deref(),
-                )
+                super::searxng::domain_permitted(&hit.url, allowed.as_deref(), excluded.as_deref())
             })
             .collect();
         let pairs: Vec<(String, String)> = hits
@@ -971,7 +972,10 @@ mod tests {
             content.contains("https://doc.rust-lang.org/book/"),
             "content should include the hit URL, got: {content}"
         );
-        assert_eq!(citations, vec!["https://doc.rust-lang.org/book/".to_string()]);
+        assert_eq!(
+            citations,
+            vec!["https://doc.rust-lang.org/book/".to_string()]
+        );
     }
     #[test]
     fn test_extract_citations_no_annotations() {

@@ -19,6 +19,9 @@ rustflags = [
     "link-args=-ObjC",
 ]
 
+# Native Apple Silicon (M1 through M5, including Pro/Max/Ultra). All of those
+# chips are `aarch64-apple-darwin`; do not pin `-C target-cpu` to a newer
+# core or the binary will SIGILL on older M-series Macs.
 [target.aarch64-apple-darwin]
 rustflags = [
     "-C",

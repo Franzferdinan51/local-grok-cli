@@ -7,12 +7,21 @@ on:
 
 jobs:
   build:
-    name: grok-local (${{ matrix.os }})
+    name: grok-local (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - name: linux-x64
+            os: ubuntu-latest
+            rust_target: x86_64-unknown-linux-gnu
+          - name: macos-apple-silicon
+            os: macos-latest
+            rust_target: aarch64-apple-darwin
+          - name: windows-x64
+            os: windows-latest
+            rust_target: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v4
 
@@ -20,6 +29,7 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.94.0
+          targets: ${{ matrix.rust_target }}
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
@@ -32,13 +42,14 @@ jobs:
         run: cargo install dotslash --locked
 
       - name: Build grok-local
-        run: cargo build -p xai-grok-pager-bin --release
+        run: cargo build -p xai-grok-pager-bin --release --target ${{ matrix.rust_target }}
 
       - name: Version
         shell: bash
         run: |
-          if [ -f target/release/grok-local.exe ]; then
-            ./target/release/grok-local.exe --version
+          t="${{ matrix.rust_target }}"
+          if [ -f "target/${t}/release/grok-local.exe" ]; then
+            "./target/${t}/release/grok-local.exe" --version
           else
-            ./target/release/grok-local --version
+            "./target/${t}/release/grok-local" --version
           fi
