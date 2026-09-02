@@ -1,4 +1,27 @@
 pub use crate::headless::OutputFormat;
+
+/// User-facing program name for shell hints (`grok-local --resume …`).
+///
+/// argv0 is used when it is this fork's binary (`grok-local`), the official
+/// `grok` name, or `agent`. Anything else (cargo test harnesses, renamed
+/// copies) falls back to `grok-local` so quit/resume text never tells people
+/// to run a different CLI.
+pub(crate) fn cli_bin_name() -> &'static str {
+    let Some(name) = std::env::args_os().next() else {
+        return "grok-local";
+    };
+    let file = std::path::Path::new(&name)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    let stem = file.strip_suffix(".exe").unwrap_or(file);
+    match stem {
+        "grok-local" => "grok-local",
+        "grok" => "grok",
+        "agent" => "agent",
+        _ => "grok-local",
+    }
+}
 use clap::{ArgAction, Parser, Subcommand, ValueHint};
 use clap_complete::Shell;
 use std::net::SocketAddr;
@@ -826,15 +849,7 @@ impl PagerArgs {
     }
     /// Parse CLI arguments without applying side effects.
     pub fn parse_cli() -> Self {
-        let bin_name = std::env::args()
-            .next()
-            .as_deref()
-            .map(std::path::Path::new)
-            .and_then(|p| p.file_name())
-            .and_then(|n| n.to_str())
-            .filter(|n| *n == "grok-local" || *n == "grok" || *n == "agent")
-            .unwrap_or("grok-local")
-            .to_owned();
+        let bin_name = cli_bin_name().to_owned();
         Self::parse_from(std::iter::once(bin_name).chain(std::env::args().skip(1)))
     }
     /// Apply launch-directory path anchoring and `--cwd` after early commands have been dispatched without filesystem or process initialization.
