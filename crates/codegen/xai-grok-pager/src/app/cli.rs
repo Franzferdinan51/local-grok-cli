@@ -116,6 +116,12 @@ See ~/.grok/README.md for more information.
         /// Check for updates without installing.
         #[arg(long)]
         check: bool,
+        /// Preview the update without downloading or changing files.
+        #[arg(long)]
+        dry_run: bool,
+        /// Restore the previous backed-up grok-local binary.
+        #[arg(long)]
+        rollback: bool,
         /// Emit machine-readable JSON output (for --check).
         #[arg(long)]
         json: bool,

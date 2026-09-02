@@ -2216,6 +2216,8 @@ async fn async_main(args: PagerArgs) -> Result<()> {
             }
             Command::Update {
                 check,
+                dry_run,
+                rollback,
                 json,
                 force_reinstall,
                 version,
@@ -2232,6 +2234,8 @@ async fn async_main(args: PagerArgs) -> Result<()> {
                 let trigger = resolve_update_trigger(trigger.as_deref(), auto);
                 return run_update_command(
                     check,
+                    dry_run,
+                    rollback,
                     json,
                     force_reinstall,
                     version,
@@ -2587,6 +2591,8 @@ fn resolve_update_trigger(flag: Option<&str>, auto: bool) -> auto_update::CliUpd
 #[tracing::instrument(level = "debug", skip_all)]
 async fn run_update_command(
     check: bool,
+    dry_run: bool,
+    rollback: bool,
     json: bool,
     force_reinstall: bool,
     version: Option<String>,
@@ -2598,7 +2604,17 @@ async fn run_update_command(
     if json && !check {
         anyhow::bail!("--json requires --check");
     }
+    if dry_run && !check {
+        anyhow::bail!("--dry-run requires --check");
+    }
+    if rollback && (check || dry_run || version.is_some() || force_reinstall || upstream) {
+        anyhow::bail!("--rollback cannot be combined with update or source-selection flags");
+    }
     let _ = (channel_switch, trigger, base_update_config);
+    if rollback {
+        xai_grok_update::fork_release::rollback_fork_release().await?;
+        return Ok(());
+    }
     // Never install official grok from x.ai — that would overwrite this fork.
     // Default: Franzferdinan51/local-grok-cli GitHub Releases.
     // --upstream: overlay-merge xai-org/grok-build into the source tree.
@@ -2618,6 +2634,12 @@ async fn run_update_command(
             );
         }
         xai_grok_update::local_sync::run_overlay_update(true).await?;
+        return Ok(());
+    }
+    if dry_run {
+        let status = xai_grok_update::fork_release::check_fork_release().await;
+        xai_grok_update::fork_release::print_fork_release_status(&status, json)?;
+        println!("Dry run: no files were downloaded or changed.");
         return Ok(());
     }
     if check {

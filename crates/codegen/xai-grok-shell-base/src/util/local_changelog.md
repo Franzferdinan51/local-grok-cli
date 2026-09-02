@@ -1,4 +1,6 @@
-# Grok Local 0.4.5
+# Grok Local 0.4.6
+
+- Added pre-install safety checks: SHA-256 verification, free-space validation, update locking, executable health checks, atomic replacement, previous-binary backups, rollback support, release-note preview, and dry-run support.
 
 - Fixed the local fork startup update prompt so it no longer offers an xAI upstream version or routes `Ctrl+U` through the upstream installer.
 

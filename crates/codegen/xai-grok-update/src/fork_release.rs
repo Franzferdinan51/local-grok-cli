@@ -4,6 +4,7 @@
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 use crate::auto_update::detect_platform;
 use crate::local_sync;
@@ -20,6 +21,7 @@ pub struct ForkReleaseStatus {
     pub latest_release_url: Option<String>,
     pub update_available: bool,
     pub asset: Option<String>,
+    pub release_notes: Option<String>,
     pub error: Option<String>,
 }
 
@@ -27,6 +29,7 @@ pub struct ForkReleaseStatus {
 struct GhRelease {
     tag_name: String,
     html_url: String,
+    body: Option<String>,
     assets: Vec<GhAsset>,
 }
 
@@ -34,6 +37,31 @@ struct GhRelease {
 struct GhAsset {
     name: String,
     browser_download_url: String,
+    digest: Option<String>,
+    #[serde(default)]
+    size: u64,
+}
+
+fn sha256(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn verify_asset_digest(bytes: &[u8], digest: Option<&String>) -> Result<()> {
+    let Some(digest) = digest else {
+        bail!("release asset has no SHA-256 digest; refusing to install")
+    };
+    let Some(expected) = digest.strip_prefix("sha256:") else {
+        bail!("release asset digest is not SHA-256: {digest}")
+    };
+    let actual = hex_encode(&sha256(bytes));
+    if !expected.eq_ignore_ascii_case(&actual) {
+        bail!("release asset SHA-256 mismatch: expected {expected}, got {actual}")
+    }
+    Ok(())
 }
 
 fn artifact_name(os: &str, arch: &str) -> Result<String> {
@@ -130,6 +158,7 @@ pub async fn check_fork_release() -> ForkReleaseStatus {
                 latest_grok_local: Some(latest),
                 latest_release_url: Some(rel.html_url),
                 asset: want,
+                release_notes: rel.body,
                 grok_local,
                 grok_build,
                 error: None,
@@ -142,6 +171,7 @@ pub async fn check_fork_release() -> ForkReleaseStatus {
             latest_release_url: None,
             update_available: false,
             asset: None,
+            release_notes: None,
             error: Some(e.to_string()),
         },
     }
@@ -159,6 +189,11 @@ pub fn print_fork_release_status(status: &ForkReleaseStatus, json: bool) -> Resu
     if let Some(error) = status.error.as_deref() {
         println!("Release check failed: {error}");
         return Ok(());
+    }
+    if let Some(notes) = status.release_notes.as_deref()
+        && !notes.trim().is_empty()
+    {
+        println!("Release notes:\n{notes}");
     }
     match status.latest_grok_local.as_deref() {
         Some(latest) if status.update_available => {
@@ -185,6 +220,28 @@ pub fn print_fork_release_status(status: &ForkReleaseStatus, json: bool) -> Resu
     Ok(())
 }
 
+pub async fn rollback_fork_release() -> Result<()> {
+    let dest = install_destination().context("cannot find grok-local install path")?;
+    let _lock = InstallLock::acquire(&dest)?;
+    let previous = dest.with_extension("previous");
+    if !previous.is_file() {
+        bail!("no previous grok-local backup found at {}", previous.display());
+    }
+    let failed = dest.with_extension(format!("failed-{}", std::process::id()));
+    if dest.exists() {
+        tokio::fs::rename(&dest, &failed).await?;
+    }
+    if let Err(error) = tokio::fs::rename(&previous, &dest).await {
+        if failed.exists() {
+            let _ = tokio::fs::rename(&failed, &dest).await;
+        }
+        return Err(error).with_context(|| format!("restore {}", previous.display()));
+    }
+    eprintln!("  Rolled back grok-local using {}", previous.display());
+    eprintln!("  Failed version retained at {}", failed.display());
+    Ok(())
+}
+
 pub async fn install_fork_release(target: Option<&str>, force: bool) -> Result<()> {
     let current = xai_grok_version::LOCAL_VERSION;
     let release = fetch_release(target).await?;
@@ -208,6 +265,19 @@ pub async fn install_fork_release(target: Option<&str>, force: bool) -> Result<(
             )
         })?;
 
+    let dest = install_destination().context("cannot find grok-local install path")?;
+    let _lock = InstallLock::acquire(&dest)?;
+    let parent = dest.parent().unwrap_or(std::path::Path::new("."));
+    let available = fs2::available_space(parent)
+        .with_context(|| format!("check free space in {}", parent.display()))?;
+    if available < asset_size_hint(asset) {
+        bail!(
+            "not enough free space for update in {} ({} bytes available)",
+            parent.display(),
+            available
+        );
+    }
+
     eprintln!("  Downloading {} from {} ...", want, release.tag_name);
     let client = api_client()?;
     let bytes = client
@@ -219,9 +289,9 @@ pub async fn install_fork_release(target: Option<&str>, force: bool) -> Result<(
         .error_for_status()?
         .bytes()
         .await?;
+    verify_asset_digest(&bytes, asset.digest.as_ref())?;
 
-    let dest = install_destination().context("cannot find grok-local install path")?;
-    let tmp = dest.with_extension("new");
+    let tmp = dest.with_extension(format!("new-{}", std::process::id()));
     tokio::fs::write(&tmp, &bytes)
         .await
         .with_context(|| format!("write {}", tmp.display()))?;
@@ -232,12 +302,60 @@ pub async fn install_fork_release(target: Option<&str>, force: bool) -> Result<(
         perms.set_mode(0o755);
         tokio::fs::set_permissions(&tmp, perms).await?;
     }
-    tokio::fs::rename(&tmp, &dest)
+    let output = tokio::process::Command::new(&tmp)
+        .arg("--version")
+        .output()
         .await
-        .with_context(|| format!("install {}", dest.display()))?;
+        .with_context(|| format!("validate {}", tmp.display()))?;
+    let version_output = String::from_utf8_lossy(&output.stdout);
+    if !output.status.success() || !version_output.contains(&format!("grok-local {latest}")) {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        bail!("downloaded release failed its version health check");
+    }
+    let backup = dest.with_extension("previous");
+    if dest.exists() {
+        tokio::fs::copy(&dest, &backup)
+            .await
+            .with_context(|| format!("backup {}", dest.display()))?;
+    }
+    #[cfg(windows)]
+    if dest.exists() {
+        tokio::fs::remove_file(&dest).await?;
+    }
+    if let Err(error) = tokio::fs::rename(&tmp, &dest).await {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(error).with_context(|| format!("install {}", dest.display()));
+    }
     eprintln!("  Installed grok-local {} -> {}", latest, dest.display());
+    eprintln!("  Previous binary saved at {}", backup.display());
     eprintln!("  Restart grok-local to use it.");
     Ok(())
+}
+
+fn asset_size_hint(asset: &GhAsset) -> u64 {
+    asset.size.saturating_mul(2).saturating_add(1024 * 1024)
+}
+
+struct InstallLock {
+    path: std::path::PathBuf,
+}
+
+impl InstallLock {
+    fn acquire(dest: &std::path::Path) -> Result<Self> {
+        let path = dest.with_extension("update.lock");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .with_context(|| format!("another update is already running ({})", path.display()))?;
+        Ok(Self { path })
+    }
+}
+
+impl Drop for InstallLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 fn install_destination() -> Option<std::path::PathBuf> {
@@ -313,5 +431,14 @@ mod tests {
             automatic_update_source("grok"),
             AutomaticUpdateSource::UpstreamInstaller
         );
+    }
+
+    #[test]
+    fn release_asset_digest_must_match_downloaded_bytes() {
+        let bytes = b"safe release";
+        let digest = format!("sha256:{}", hex_encode(&sha256(bytes)));
+        assert!(verify_asset_digest(bytes, Some(&digest)).is_ok());
+        assert!(verify_asset_digest(bytes, Some(&"sha256:00".to_string())).is_err());
+        assert!(verify_asset_digest(bytes, None).is_err());
     }
 }
