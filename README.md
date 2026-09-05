@@ -93,6 +93,16 @@ creates, replaces, or redirects `grok`. Put `target/release` (or a copy of
 `~/.grok-local` (`%USERPROFILE%\.grok-local` on Windows), override with
 `$GROK_HOME`.
 
+On Windows PowerShell, install the built binary and add the user bin directory
+to `PATH` with:
+
+```powershell
+.\scripts\install.ps1
+```
+
+Use `-BinaryPath` to install a binary from another location, or `-InstallDir`
+to choose a different user bin directory.
+
 ## Building from source
 
 Requirements:
