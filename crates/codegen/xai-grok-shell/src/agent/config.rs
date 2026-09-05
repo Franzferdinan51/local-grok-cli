@@ -52,6 +52,11 @@ pub const XAI_API_BASE_URL_DEFAULT: &str = "https://api.x.ai/v1";
 pub const LM_STUDIO_BASE_URL_DEFAULT: &str = "http://127.0.0.1:1234/v1";
 /// Dummy bearer LM Studio accepts when the server has no API key.
 pub const LM_STUDIO_DUMMY_API_KEY: &str = "lm-studio";
+/// Environment variable name for a token-protected LM Studio server.
+/// Checked first for local inference URLs before falling back to `LM_STUDIO_DUMMY_API_KEY`.
+/// Intentionally not listed in `FIRST_PARTY_CREDENTIAL_ENV_VARS` — it is a
+/// third-party (LM Studio) credential, not a xAI credential.
+pub const LM_STUDIO_API_KEY_ENV_VAR: &str = "LM_STUDIO_API_KEY";
 const NO_INLINE_CITATIONS_RESPONSE_INCLUDE: &str = "no_inline_citations";
 /// One or more environment variable names that may hold a model API key.
 ///

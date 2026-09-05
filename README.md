@@ -36,6 +36,16 @@ Embeddings stay hidden. Set `LM_STUDIO_MODEL` to pick one by id. Web search
 defaults to SearxNG at `http://127.0.0.1:8888` (`SEARXNG_URL`; a trailing
 `/search` is stripped). Do not point this at Open WebUI on `:8080`.
 
+If your LM Studio server requires authentication, set the `LM_STUDIO_API_KEY`
+environment variable to your Bearer token. This is only needed when your
+LM Studio server has API-token auth enabled. When unset or blank, the
+client uses an unauthenticated default (`lm-studio`) that works with
+unprotected LM Studio instances:
+
+```sh
+export LM_STUDIO_API_KEY="your-token-here"
+```
+
 A small `SOURCE_REV` file at the root records the grok-build monorepo SHA
 in this tree. `grok-local --version` prints **both** the grok-local fork
 version and the grok-build version that overlay was applied on.
