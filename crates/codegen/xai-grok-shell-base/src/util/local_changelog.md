@@ -1,3 +1,8 @@
+# Grok Local 0.4.9
+
+- Added `LM_STUDIO_API_KEY` environment variable support for token-protected LM Studio servers. When set, the value is used as the Bearer token for both model discovery and chat completions. When unset or blank, falls back to the default `lm-studio` token for backward compatibility with unprotected instances.
+- Fixed VTE shortcut handling and local reasoning-effort controls.
+
 # Grok Local 0.4.8
 
 - Fixed internal updater activation and rollback paths to manage `grok-local` separately from the official `grok` command.
