@@ -327,7 +327,13 @@ impl TerminalContext {
         if self.brand == TerminalName::AppleTerminal {
             return Some("apple_terminal");
         }
-        if self.is_vte_based() {
+        if self.is_vte_based()
+            && !self
+                .vte_version
+                .as_deref()
+                .and_then(|version| version.parse::<u32>().ok())
+                .is_some_and(|version| version >= 8200)
+        {
             return Some("vte");
         }
         if self.brand == TerminalName::WindowsTerminal {

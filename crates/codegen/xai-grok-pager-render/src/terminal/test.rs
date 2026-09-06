@@ -1542,6 +1542,16 @@ fn kitty_skip_vte_version() {
 }
 
 #[test]
+fn kitty_keyboard_is_enabled_for_modern_vte() {
+    let ctx = TerminalContext {
+        brand: TerminalName::Vte,
+        vte_version: Some("8401".to_owned()),
+        ..Default::default()
+    };
+    assert_eq!(ctx.kitty_skip_reason(), None);
+}
+
+#[test]
 fn kitty_skip_vte_brand() {
     let ctx = TerminalContext {
         brand: TerminalName::Vte,

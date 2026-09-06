@@ -12,6 +12,7 @@ use crate::agent::config::{
     ModelInfo,
 };
 use crate::sampling::ApiBackend;
+use xai_grok_sampling_types::{ReasoningEffort, ReasoningEffortOption};
 
 /// One model advertised by LM Studio.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +34,33 @@ fn is_chat_model(kind: &str, id: &str) -> bool {
         return false;
     }
     k.is_empty() || k == "llm" || k == "vlm"
+}
+
+fn local_reasoning_effort_options() -> Vec<ReasoningEffortOption> {
+    [
+        ReasoningEffort::Minimal,
+        ReasoningEffort::Low,
+        ReasoningEffort::Medium,
+        ReasoningEffort::High,
+        ReasoningEffort::Xhigh,
+    ]
+    .into_iter()
+    .map(|value| ReasoningEffortOption {
+        id: value.as_str().to_string(),
+        value,
+        label: match value {
+            ReasoningEffort::Minimal => "Minimal",
+            ReasoningEffort::Low => "Low",
+            ReasoningEffort::Medium => "Medium",
+            ReasoningEffort::High => "High",
+            ReasoningEffort::Xhigh => "X-High",
+            _ => unreachable!("local effort menu only contains selectable levels"),
+        }
+        .to_string(),
+        description: None,
+        default: false,
+    })
+    .collect()
 }
 
 /// Parse LM Studio native `/api/v0/models` JSON.
@@ -143,6 +171,8 @@ fn entry_for_discovered(
     info.model_family = Some("lm-studio".to_string());
     info.api_backend = ApiBackend::ChatCompletions;
     info.supports_backend_search = false;
+    info.supports_reasoning_effort = true;
+    info.reasoning_efforts = local_reasoning_effort_options();
     if let Some(cw) = model.max_context_length.and_then(NonZeroU64::new) {
         info.context_window = cw;
     }
@@ -512,5 +542,28 @@ mod tests {
         assert_eq!(entry.info.api_backend, ApiBackend::ChatCompletions);
         assert_eq!(entry.api_key.as_deref(), Some(LM_STUDIO_DUMMY_API_KEY));
         assert_eq!(entry.info.model_family.as_deref(), Some("lm-studio"));
+    }
+
+    #[test]
+    fn entry_for_id_exposes_reasoning_effort_levels() {
+        let entry = entry_for_id("reasoning-model", "http://127.0.0.1:1234/v1");
+        let values: Vec<_> = entry
+            .info
+            .reasoning_efforts
+            .iter()
+            .map(|option| option.value)
+            .collect();
+
+        assert!(entry.info.supports_reasoning_effort);
+        assert_eq!(
+            values,
+            vec![
+                ReasoningEffort::Minimal,
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High,
+                ReasoningEffort::Xhigh,
+            ]
+        );
     }
 }
