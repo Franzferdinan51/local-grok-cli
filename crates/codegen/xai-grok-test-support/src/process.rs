@@ -181,8 +181,13 @@ impl TailState {
         self.bytes_seen = self.bytes_seen.saturating_add(bytes.len() as u64);
         if bytes.len() >= self.capacity {
             self.bytes.clear();
-            self.bytes
-                .extend_from_slice(&bytes[bytes.len() - self.capacity..]);
+            self.bytes.extend_from_slice(
+                bytes
+                    .len()
+                    .checked_sub(self.capacity)
+                    .and_then(|start| bytes.get(start..))
+                    .unwrap_or(bytes),
+            );
             self.truncated = true;
             return;
         }
@@ -252,7 +257,7 @@ macro_rules! captured_reader {
                 let before = buf.filled().len();
                 match Pin::new(&mut this.inner).poll_read(cx, buf) {
                     Poll::Ready(Ok(())) => {
-                        this.tail.append(&buf.filled()[before..]);
+                        this.tail.append(buf.filled().get(before..).unwrap_or(&[]));
                         Poll::Ready(Ok(()))
                     }
                     Poll::Ready(Err(error)) => {
@@ -421,11 +426,9 @@ pub struct TestProcess {
 }
 
 impl TestProcess {
-    /// Spawn from the [`TestSandbox`] baseline with detached, piped stdio and test-owned process-tree cleanup.
-    ///
-    /// Unix detachment establishes the child's session/process group before exec.
-    /// Windows preserves `CREATE_NO_WINDOW`.
-    /// Job attachment uses the post-spawn API, so very short-lived descendants can escape before enrollment and cleanup remains best effort.
+    /// Spawn from the [`TestSandbox`] baseline with detached, piped stdio and test-owned process-tree cleanup. Unix
+    /// detachment establishes the child's session/process group before exec. Job attachment uses the post-spawn API, so very
+    /// short-lived descendants can escape before enrollment and cleanup remains best effort.
     pub fn spawn(
         mut cmd: tokio::process::Command,
         sandbox: &TestSandbox,
@@ -828,10 +831,9 @@ fn is_missing_process_error(error: &io::Error) -> bool {
     }
 }
 
-/// Observe an owned Unix child exit without consuming its wait status.
-///
-/// The caller must own the direct child identified by `pid`.
-/// `ECHILD` is returned unchanged when another waiter already consumed the status, so callers can tell that race from a live child.
+/// Observe an owned Unix child exit without consuming its wait status. The caller must own the direct child identified by
+/// `pid`. `ECHILD` is returned unchanged when another waiter already consumed the status, so callers can tell that race
+/// from a live child.
 #[cfg(unix)]
 pub fn process_has_exited_without_reap(pid: u32, label: &str) -> io::Result<bool> {
     if pid == 0 || pid > i32::MAX as u32 {
@@ -875,7 +877,11 @@ where
         loop {
             match reader.read(&mut buffer).await {
                 Ok(0) => break,
-                Ok(read) => tail.append(&buffer[..read]),
+                Ok(read) => {
+                    if let Some(chunk) = buffer.get(..read) {
+                        tail.append(chunk);
+                    }
+                }
                 Err(error) => {
                     tail.record_error(&error);
                     break;

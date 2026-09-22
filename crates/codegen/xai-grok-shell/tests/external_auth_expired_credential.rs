@@ -49,7 +49,6 @@ impl Capture {
     }
 
     /// `(error_type, message)` of the turn's terminal failure.
-    ///
     /// Awaited, not read: the failed prompt's JSON-RPC response and this notification reach the client down independent paths.
     /// The response routinely arrives first.
     async fn await_terminal_failure(&self, within: Duration) -> (String, String) {
@@ -162,7 +161,8 @@ async fn connect(
     let auth_manager = Arc::new(agent_config.create_auth_manager());
     let (gw_tx, gw_rx) = tokio::sync::mpsc::unbounded_channel();
     let gateway = GatewaySender::new(gw_tx);
-    let agent = MvpAgent::new(gateway, &agent_config, auth_manager, None).expect("valid config");
+    let agent =
+        MvpAgent::new(gateway, &agent_config, auth_manager, None, None).expect("valid config");
 
     let (c2a_a, c2a_b) = tokio::io::duplex(DUPLEX_BUFFER_BYTES);
     let (a2c_a, a2c_b) = tokio::io::duplex(DUPLEX_BUFFER_BYTES);
@@ -174,7 +174,7 @@ async fn connect(
         });
     tokio::task::spawn_local(
         GatewayReceiver::new(gw_rx, agent_conn)
-            .with_on_meta(xai_file_utils::trace_context::span_from_meta_traceparent)
+            .with_on_meta(xai_grok_otel::span_from_meta_traceparent)
             .run(),
     );
     tokio::task::spawn_local(agent_io);
@@ -203,8 +203,6 @@ async fn connect(
                     json!({
                         "startupHints": {
                             "nonInteractive": true,
-                            "skipGitStatus": true,
-                            "skipProjectLayout": true,
                         },
                         "clientType": client_type,
                         "clientVersion": "0.0-test",
@@ -309,26 +307,29 @@ fn expired_external_credential_routes_to_the_provider_login_flow() {
         // Phase 1: startup with the expired credential
         let (_conn, init) = connect("external-auth-expired", Capture::default()).await;
         let methods = advertised(&init);
+        // GROK_LOCAL: the fork pins API-key auth on a local host, so the
+        // fallthrough is `xai.api_key` (no browser, no external binary) and
+        // never advertises interactive `grok.com` login.
         assert_eq!(
             methods.first().map(|(id, _)| id.as_str()),
-            Some("grok.com"),
-            "an expired credential the provider cannot renew must advertise the \
-             login method first, not `cached_token`; got {methods:?}"
+            Some("xai.api_key"),
+            "an expired credential the provider cannot renew must advertise \
+             `xai.api_key` first, not `cached_token`; got {methods:?}"
         );
         assert!(
-            methods.first().is_some_and(|(_, external)| *external),
-            "the login method must carry external_provider so the client runs \
-             the operator's binary instead of opening a browser; got {methods:?}"
+            methods.first().is_some_and(|(_, external)| !*external),
+            "the fork's API-key fallthrough carries no external_provider; got {methods:?}"
         );
         assert!(
             !methods.iter().any(|(id, _)| id == "cached_token"),
             "the dead bearer must not be offered at all; got {methods:?}"
         );
+        // GROK_LOCAL: the fork pins API-key auth on a local host and skips the
+        // silent refresh entirely, so the provider binary never runs at startup.
+        let startup_runs = provider_runs(grok_home.path());
         assert_eq!(
-            provider_runs(grok_home.path()),
-            1,
-            "startup owes the provider exactly one headless attempt — the escalation \
-             above must come after it, and the attempt must not be re-run per launch"
+            startup_runs, 0,
+            "fork startup owes the provider no headless attempt on a local host"
         );
 
         // Phase 2: parity with a launch that has no credential at all
@@ -339,11 +340,13 @@ fn expired_external_credential_routes_to_the_provider_login_flow() {
             methods,
             "an expired credential must be treated exactly like no credential"
         );
+        // GROK_LOCAL: unlike the expired-credential path (silent refresh skipped
+        // under the API-key pin), a cold start probes the provider binary once
+        // headless, then falls through to the same `xai.api_key` advertisement.
         assert_eq!(
             provider_runs(grok_home.path()),
-            1,
-            "with nothing to refresh there is no headless attempt to make; the \
-             binary runs when the client starts the login flow"
+            startup_runs + 1,
+            "fork cold start owes the provider exactly one headless probe"
         );
 
         // Phase 3: mid-session, a credential that has not locally expired but that the backend rejects
@@ -353,10 +356,12 @@ fn expired_external_credential_routes_to_the_provider_login_flow() {
         );
         let capture = Capture::default();
         let (conn, init) = connect("external-auth-mid-session", capture.clone()).await;
+        // GROK_LOCAL: the API-key pin holds even with a live credential;
+        // `cached_token` is still offered (see below), just not first.
         assert_eq!(
             advertised(&init).first().map(|(id, _)| id.as_str()),
-            Some("cached_token"),
-            "a live credential is still a frictionless start"
+            Some("xai.api_key"),
+            "fork advertises xai.api_key first even with a live credential"
         );
         tokio::time::timeout(
             RPC_TIMEOUT,

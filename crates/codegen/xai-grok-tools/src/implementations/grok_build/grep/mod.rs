@@ -160,10 +160,9 @@ pub const DEFAULT_MAX_CHARS_PER_LINE: usize = 1_000;
 /// Hard cap on bytes read from ripgrep's stdout (5 MB).
 const MAX_STDOUT_BYTES: usize = 5_000_000;
 
-/// After the line/byte budget is filled, how long to wait for one more byte to
-/// distinguish exact-fit (EOF) from overflow. Must stay far below the tool
-/// wall-clock timeout: an unbounded probe can block until the outer timeout
-/// and discard the already-buffered matches via `grep_timeout_output`.
+/// After the line/byte budget is filled, how long to wait for one more byte to distinguish exact-fit (EOF) from
+/// overflow. Must stay far below the tool wall-clock timeout: an unbounded probe can block until the outer timeout and
+/// discard the already-buffered matches via `grep_timeout_output`.
 const EXACT_FIT_PROBE_TIMEOUT: Duration = Duration::from_millis(100);
 
 /// Default grep wall-clock timeout (seconds) on non-WSL platforms.
@@ -186,10 +185,9 @@ fn grep_timeout() -> Duration {
     Duration::from_secs(grep_timeout_secs(xai_tty_utils::is_wsl()))
 }
 
-/// Resolve the effective line/entry budget for this call.
-///
-/// Always returns a finite limit so we can stop reading (and kill `rg`) once
-/// enough output is in hand — even when the model omits `head_limit`.
+/// Resolve the effective line/entry budget for this call. Always returns a finite limit so we can
+/// stop reading (and kill `rg`) once enough output is in hand — even when the model omits
+/// `head_limit`.
 fn resolve_effective_head_limit(input: &GrepSearchInput, output_mode: &OutputMode) -> usize {
     let (default, cap) = match output_mode {
         OutputMode::Content => (CONTENT_LINE_DEFAULT, CONTENT_LINE_LIMIT),
@@ -198,11 +196,9 @@ fn resolve_effective_head_limit(input: &GrepSearchInput, output_mode: &OutputMod
     input.head_limit.unwrap_or(default).min(cap)
 }
 
-/// Hard `head_limit` ceiling for a mode (what an explicit limit is clamped to).
-///
-/// Callers that paginate over the full underlying result themselves
-/// must request this instead of `head_limit: None`, which
-/// now resolves to the small omitted-`head_limit` default and kills `rg` early.
+/// Hard `head_limit` ceiling for a mode (what an explicit limit is clamped to). Callers that
+/// paginate over the full underlying result themselves must request this instead of `head_limit:
+/// None`, which now resolves to the small omitted-`head_limit` default and kills `rg` early.
 pub fn max_head_limit(output_mode: &OutputMode) -> usize {
     match output_mode {
         OutputMode::Content => CONTENT_LINE_LIMIT,
@@ -210,9 +206,8 @@ pub fn max_head_limit(output_mode: &OutputMode) -> usize {
     }
 }
 
-/// grep's capabilities incl. its streaming spec (single source of truth).
-/// grep streams the formatted card body (`PlainText` / `Append`), never raw
-/// stdout; the `<workspace_result …>` wrapper and "Found N …" summary are a
+/// grep's capabilities incl. its streaming spec (single source of truth). grep streams the formatted card body
+/// (`PlainText` / `Append`), never raw stdout; the `<workspace_result …>` wrapper and "Found N …" summary are a
 /// terminal-only footer, so the stream is a faithful prefix of the card body.
 static GREP_CAPABILITIES: LazyLock<xai_tool_protocol::ToolCapabilities> =
     LazyLock::new(|| xai_tool_protocol::ToolCapabilities {
@@ -275,12 +270,9 @@ impl xai_tool_runtime::Tool for GrepTool {
         GREP_CAPABILITIES.clone()
     }
 
-    /// Streaming entry point. Gate OFF (default): byte-for-byte the blocking
-    /// [`GrepTool::run`] contract. Gate ON: spawn ripgrep, project each match
-    /// line via [`BodyStreamer`] (same projection [`finalize_grep`] re-derives
-    /// in batch) and emit `grep_match_chunk` deltas — the stream is a faithful
-    /// prefix of the terminal card body. Gated by
-    /// `WorkspaceViewerContext::stream_tool_progress`.
+    /// Streaming entry point. Gate OFF (default): byte-for-byte the blocking [`GrepTool::run`] contract. Gate ON: spawn ripgrep, project each match
+    /// line via [`BodyStreamer`] (same projection [`finalize_grep`] re-derives in batch) and emit `grep_match_chunk` deltas — the stream is a
+    /// faithful prefix of the terminal card body. Gated by `WorkspaceViewerContext::stream_tool_progress`.
     async fn execute(
         &self,
         ctx: xai_tool_runtime::ToolCallContext,
@@ -347,11 +339,9 @@ impl xai_tool_runtime::Tool for GrepTool {
 
         let timeout = grep_timeout();
         let io_result = tokio::time::timeout(timeout, async {
-            // Read stdout until EOF, byte cap, or one line past the budget.
-            // Reading `effective_head_limit + 1` lines lets us distinguish an
-            // exact-fit result (not truncated) from an overflowing one, so we
-            // never flag truncation when there are exactly `effective_head_limit`
-            // lines — matching `finalize_grep`'s `> limit` check.
+            // Read stdout until EOF, byte cap, or one line past the budget. Reading `effective_head_limit + 1` lines lets us
+            // distinguish an exact-fit result (not truncated) from an overflowing one, so we never flag truncation when there are
+            // exactly `effective_head_limit` lines — matching `finalize_grep`'s `> limit` check.
             let (stdout_buf, stdout_truncated) = if let Some(stdout_pipe) = stdout_pipe {
                 read_rg_stdout_capped(stdout_pipe, config.effective_head_limit.saturating_add(1))
                     .await
@@ -360,12 +350,6 @@ impl xai_tool_runtime::Tool for GrepTool {
             };
 
             // Kill `rg` **before** draining stderr when we stopped at the budget.
-            // Dropping `stdout_pipe` above closes the read end, but a tree-walking
-            // `rg` only observes that on its next match write; until then it holds
-            // stderr open, so `read_to_end` would block until `rg` exits or the
-            // outer timeout fires — the latter returns `grep_timeout_output` and
-            // drops the matches we already buffered (the same failure the
-            // exact-fit probe bound guards against, one step later).
             if stdout_truncated {
                 let _ = child.start_kill();
             }
@@ -490,44 +474,39 @@ fn grep_progress_stream(
                             Ok(n) => n,
                             Err(_) => break,
                         };
-                        // Mirror `run`'s hard byte + line caps when filling
-                        // `stdout_buf`, then kill so rg stops walking the tree.
-                        // `+ 1`: read one line past the budget so truncation is
-                        // only flagged when there are genuinely MORE than
-                        // `effective_head_limit` lines (matches `run` /
-                        // `finalize_grep`). The extra line is dropped by
-                        // `BodyStreamer`/`finalize_grep`, never emitted.
+                        // Mirror `run`'s hard byte + line caps when filling `stdout_buf`, then kill so rg stops walking the tree. `+ 1`: read
+                        // one line past the budget so truncation is only flagged when there are genuinely MORE than `effective_head_limit`
+                        // lines (matches `run` / `finalize_grep`). The extra line is dropped by `BodyStreamer`/`finalize_grep`, never emitted.
+                        let Some(chunk) = tmp.get(..n) else {
+                            break;
+                        };
                         let (accepted, hit_cap) = accept_rg_stdout_chunk(
-                            &tmp[..n],
+                            chunk,
                             stdout_buf.len(),
                             complete_lines,
                             config.effective_head_limit.saturating_add(1),
                         );
                         if accepted > 0 {
-                            complete_lines += tmp[..accepted]
-                                .iter()
-                                .filter(|&&b| b == b'\n')
-                                .count();
-                            stdout_buf.extend_from_slice(&tmp[..accepted]);
+                            let Some(accepted_bytes) = tmp.get(..accepted) else {
+                                break;
+                            };
+                            complete_lines += accepted_bytes.iter().filter(|&&b| b == b'\n').count();
+                            stdout_buf.extend_from_slice(accepted_bytes);
                         }
 
-                        // Project + emit each newly completed line BEFORE the
-                        // exact-fit probe below: the probe reads into `tmp`,
-                        // overwriting the just-accepted bytes, so feeding after
-                        // it would stream corrupted data (the terminal card is
-                        // rebuilt from `stdout_buf`, but streamed deltas must
-                        // stay a faithful prefix of it).
-                        for p in streamer.feed(&tmp[..accepted]) {
-                            yield xai_tool_runtime::ToolStreamItem::Progress(p);
+                        // Project + emit each newly completed line BEFORE the exact-fit probe below: the probe reads into `tmp`, overwriting
+                        // the just-accepted bytes, so feeding after it would stream corrupted data (the terminal card is rebuilt from
+                        // `stdout_buf`, but streamed deltas must stay a faithful prefix of it).
+                        if let Some(accepted_bytes) = tmp.get(..accepted) {
+                            for p in streamer.feed(accepted_bytes) {
+                                yield xai_tool_runtime::ToolStreamItem::Progress(p);
+                            }
                         }
 
                         if hit_cap {
-                            // Same short exact-fit probe as `read_rg_stdout_capped`.
-                            // Use ONLY `EXACT_FIT_PROBE_TIMEOUT` — never the shared
-                            // tool `deadline_at`. Clamping the probe to `deadline_at`
-                            // and setting `timed_out` on expiry would force the
-                            // timeout terminal branch (banner, exit -1) for a
-                            // normal head-limit fill near the wall-clock edge.
+                            // Same short exact-fit probe as `read_rg_stdout_capped`. Use ONLY `EXACT_FIT_PROBE_TIMEOUT` — never the shared tool
+                            // `deadline_at`. Clamping the probe to `deadline_at` and setting `timed_out` on expiry would force the timeout
+                            // terminal branch (banner, exit -1) for a normal head-limit fill near the wall-clock edge.
                             if accepted < n {
                                 stdout_truncated = true;
                             } else {
@@ -602,11 +581,9 @@ fn grep_progress_stream(
             yield xai_tool_runtime::ToolStreamItem::Progress(p);
         }
 
-        // Kill the child **before** draining stderr when we stopped early
-        // (byte/line/format cap); rg may still be walking the tree and only
-        // notices the closed stdout on its next write, so a stderr drain first
-        // would stall until the deadline (up to the full timeout) even though we
-        // already have a full budget.
+        // Kill the child **before** draining stderr when we stopped early (byte/line/format cap); rg may still be walking the
+        // tree and only notices the closed stdout on its next write, so a stderr drain first would stall until the deadline
+        // (up to the full timeout) even though we already have a full budget.
         if stdout_truncated {
             let _ = child.start_kill();
         }
@@ -717,15 +694,20 @@ async fn prepare_grep(
     // Use display_cwd for output paths so model sees stable paths.
     let display_base = display_cwd_or_cwd(&cwd, display_cwd.as_deref());
     let cwd_display = display_base.display().to_string();
+    if let Err(error) = crate::types::memory_v2::validate_memory_v2_read(&resources, &workdir).await
+    {
+        return Ok(GrepStep::Early(GrepSearchOutput {
+            stdout: Vec::new(),
+            stderr: error.into_bytes(),
+            exit_code: 2,
+            match_count: 0,
+            file_matches: Vec::new(),
+        }));
+    }
 
-    // Pre-check: if the search path doesn't exist, return enriched hints
-    // before rg runs. We intentionally pre-check with metadata() rather
-    // than parsing rg's stderr after the fact because rg lumps all errors
-    // under exit code 2 (path not found, invalid regex, bad glob, unknown
-    // file type, etc.). Distinguishing path-not-found would require
-    // matching on OS error strings in stderr, which is fragile. The
-    // pre-check avoids that and keeps the exit-code-2 handler below
-    // unchanged for all other rg error classes.
+    // Pre-check: if the search path doesn't exist, return enriched hints before rg runs. We intentionally pre-check with metadata() rather than
+    // parsing rg's stderr after the fact because rg lumps all errors under exit code 2 (path not found, invalid regex, bad glob, unknown file
+    // type, etc.). Distinguishing path-not-found would require matching on OS error strings in stderr, which is fragile.
     if input.path.is_some()
         && let Err(e) = tokio::fs::metadata(&workdir).await
         && e.kind() == std::io::ErrorKind::NotFound
@@ -776,12 +758,9 @@ async fn prepare_grep(
         cmd.arg("--glob").arg(glob);
     }
 
-    // Managed Read-deny globs become ripgrep excludes so a search never reads
-    // a policy-forbidden path — whether reached by a recursive walk or by a
-    // `glob` arg that targets a denied file. Added AFTER the caller's `--glob`
-    // so the exclude wins (ripgrep applies the last matching glob). An
-    // explicitly-passed denied `path` is blocked earlier by the permission
-    // manager (ripgrep searches explicit paths even against excludes).
+    // Managed Read-deny globs become ripgrep excludes so a search never reads a policy-forbidden path — whether reached by a recursive walk or by
+    // a `glob` arg that targets a denied file. Added AFTER the caller's `--glob` so the exclude wins (ripgrep applies the last matching glob). An
+    // explicitly-passed denied `path` is blocked earlier by the permission manager (ripgrep searches explicit paths even against excludes).
     for deny in &deny_read_globs {
         cmd.arg("--glob").arg(format!("!{deny}"));
     }
@@ -880,11 +859,9 @@ async fn prepare_grep(
     }))
 }
 
-/// Longest prefix of `bytes` that ends on a UTF-8 character boundary.
-///
-/// Used when a hard *byte* budget would otherwise cut mid-code-unit; line-budget
-/// stops already land on `\n` (ASCII), so they are always boundaries. Counting
-/// lines by `b'\n'` is UTF-8-safe (newlines are never multi-byte).
+/// Longest prefix of `bytes` that ends on a UTF-8 character boundary. Used when a hard *byte* budget would otherwise
+/// cut mid-code-unit; line-budget stops already land on `\n` (ASCII), so they are always boundaries. Counting lines by
+/// `b'\n'` is UTF-8-safe (newlines are never multi-byte).
 fn utf8_char_boundary_prefix_len(bytes: &[u8]) -> usize {
     match std::str::from_utf8(bytes) {
         Ok(_) => bytes.len(),
@@ -892,17 +869,9 @@ fn utf8_char_boundary_prefix_len(bytes: &[u8]) -> usize {
     }
 }
 
-/// How many leading bytes of a newly-read `rg` chunk to accept, given the
-/// running byte/line budgets. Returns `(accepted_len, hit_cap)`.
-///
-/// Stops at the first of: remaining room under [`MAX_STDOUT_BYTES`], or the
-/// newline that brings complete line count to `max_lines`. Used by both the
+/// How many leading bytes of a newly-read `rg` chunk to accept, given the running byte/line budgets. Returns `(accepted_len, hit_cap)`. Stops
+/// at the first of: remaining room under [`MAX_STDOUT_BYTES`], or the newline that brings complete line count to `max_lines`. Used by both the
 /// blocking and streaming read loops so early-kill behavior cannot drift.
-///
-/// On a pure byte-cap stop (no line budget hit), the accepted slice is snapped
-/// to a UTF-8 char boundary so we never append a partial multi-byte sequence
-/// into `stdout_buf` (downstream uses `String::from_utf8_lossy`, but mid-char
-/// cuts also break incremental `BodyStreamer` line assembly).
 fn accept_rg_stdout_chunk(
     chunk: &[u8],
     buf_len: usize,
@@ -917,7 +886,9 @@ fn accept_rg_stdout_chunk(
     }
 
     let byte_room = MAX_STDOUT_BYTES - buf_len;
-    let limited = &chunk[..chunk.len().min(byte_room)];
+    let Some(limited) = chunk.get(..chunk.len().min(byte_room)) else {
+        return (0, false);
+    };
     let mut lines = complete_lines;
     for (i, &b) in limited.iter().enumerate() {
         if b == b'\n' {
@@ -940,15 +911,9 @@ fn accept_rg_stdout_chunk(
     (limited.len(), false)
 }
 
-/// Read `rg` stdout until EOF or a hard stop (byte cap / effective head_limit
-/// lines). Callers should kill the child when the returned truncated flag is
-/// set so `rg` does not keep walking the tree.
-/// When the line budget is filled exactly and the next read is EOF, `truncated`
-/// is **false** (exact fit). If more bytes remain after the budget, true.
-///
-/// The post-budget "exact-fit" probe is **time-bounded** ([`EXACT_FIT_PROBE_TIMEOUT`]).
-/// An unbounded `read` would hold the outer tool timeout and, on expiry, drop the
-/// already-buffered matches in favor of a timeout error card.
+/// Read `rg` stdout until EOF or a hard stop (byte cap / effective head_limit lines). Callers should kill the child
+/// when the returned truncated flag is set so `rg` does not keep walking the tree. When the line budget is filled
+/// exactly and the next read is EOF, `truncated` is **false** (exact fit). If more bytes remain after the budget, true.
 async fn read_rg_stdout_capped(mut stdout_pipe: ChildStdout, max_lines: usize) -> (Vec<u8>, bool) {
     let mut buf = Vec::with_capacity(MAX_STDOUT_BYTES.min(65_536));
     let mut complete_lines = 0usize;
@@ -958,11 +923,17 @@ async fn read_rg_stdout_capped(mut stdout_pipe: ChildStdout, max_lines: usize) -
         match stdout_pipe.read(&mut tmp).await {
             Ok(0) => break,
             Ok(n) => {
+                let Some(chunk) = tmp.get(..n) else {
+                    break;
+                };
                 let (accepted, hit_cap) =
-                    accept_rg_stdout_chunk(&tmp[..n], buf.len(), complete_lines, max_lines);
+                    accept_rg_stdout_chunk(chunk, buf.len(), complete_lines, max_lines);
                 if accepted > 0 {
-                    complete_lines += tmp[..accepted].iter().filter(|&&b| b == b'\n').count();
-                    buf.extend_from_slice(&tmp[..accepted]);
+                    let Some(accepted_bytes) = tmp.get(..accepted) else {
+                        break;
+                    };
+                    complete_lines += accepted_bytes.iter().filter(|&&b| b == b'\n').count();
+                    buf.extend_from_slice(accepted_bytes);
                 }
                 if hit_cap {
                     if accepted < n {
@@ -1133,11 +1104,9 @@ fn finalize_grep(
     }
 }
 
-/// Incremental builder for grep's streamed card body: raw stdout in via
-/// [`BodyStreamer::feed`], flushed at EOF via [`BodyStreamer::finish`]. Each
-/// line is projected exactly as [`finalize_grep`] projects the terminal body,
-/// so the concatenated deltas equal the card body (prefix mode). Line
-/// splitting matches `str::lines()` exactly (incl. trailing-`\r` handling).
+/// Incremental builder for grep's streamed card body: raw stdout in via [`BodyStreamer::feed`], flushed at EOF via [`BodyStreamer::finish`].
+/// Each line is projected exactly as [`finalize_grep`] projects the terminal body, so the concatenated deltas equal the card body (prefix
+/// mode). Line splitting matches `str::lines()` exactly (incl. trailing-`\r` handling).
 struct BodyStreamer<'a> {
     spec: &'a xai_tool_protocol::StreamingSpec,
     config: &'a GrepFormatConfig,
@@ -1181,13 +1150,18 @@ impl<'a> BodyStreamer<'a> {
         // alloc); the unconsumed tail is carried forward at the end.
         let buf = std::mem::take(&mut self.pending);
         let mut start = 0;
-        while let Some(rel) = buf[start..].iter().position(|&b| b == b'\n') {
+        while let Some(rel) = buf
+            .get(start..)
+            .and_then(|tail| tail.iter().position(|&b| b == b'\n'))
+        {
             let nl = start + rel;
             let mut end = nl; // exclusive; drops the '\n'
-            if end > start && buf[end - 1] == b'\r' {
+            if end > start && end.checked_sub(1).and_then(|i| buf.get(i).copied()) == Some(b'\r') {
                 end -= 1; // drop the '\r' of a '\r\n' (matches `str::lines()`)
             }
-            if let Some(p) = self.push_line(&buf[start..end]) {
+            if let Some(line) = buf.get(start..end)
+                && let Some(p) = self.push_line(line)
+            {
                 deltas.push(p);
             }
             start = nl + 1;
@@ -1196,7 +1170,9 @@ impl<'a> BodyStreamer<'a> {
             }
         }
         // Carry the in-progress (post-last-newline) bytes to the next feed.
-        self.pending.extend_from_slice(&buf[start..]);
+        if let Some(tail) = buf.get(start..) {
+            self.pending.extend_from_slice(tail);
+        }
         deltas
     }
 
@@ -1252,28 +1228,26 @@ fn trim_line(line: &str, max_chars_per_line: usize) -> String {
     truncate_line(line, max_chars_per_line).into_owned()
 }
 
-/// Parse a ripgrep "numbered line" prefix: `123:content` or `45-context`.
-///
-/// `pub` so siblings can reuse the parser instead of
-/// duplicating it -- avoids drift between the two namespaces' rg-output
+/// Parse a ripgrep "numbered line" prefix: `123:content` or `45-context`. `pub` so siblings can
+/// reuse the parser instead of duplicating it -- avoids drift between the two namespaces' rg-output
 /// reformatters.
 pub fn parse_numbered_line_prefix(line: &str) -> Option<(usize, char, &str)> {
     let bytes = line.as_bytes();
     let mut idx = 0usize;
-    while idx < bytes.len() && bytes[idx].is_ascii_digit() {
+    while bytes.get(idx).is_some_and(|b| b.is_ascii_digit()) {
         idx += 1;
     }
     if idx == 0 || idx >= bytes.len() {
         return None;
     }
 
-    let sep = bytes[idx] as char;
+    let sep = *bytes.get(idx)? as char;
     if sep != ':' && sep != '-' {
         return None;
     }
 
-    let line_number = line[..idx].parse::<usize>().ok()?;
-    Some((line_number, sep, &line[idx + 1..]))
+    let line_number = line.get(..idx)?.parse::<usize>().ok()?;
+    Some((line_number, sep, line.get(idx + 1..)?))
 }
 
 /// Parse ripgrep `--heading` output into structured per-file matches.
@@ -1375,9 +1349,11 @@ pub fn format_content_output(
         .collect();
 
     let cut_idx = first_idx_exceed_cum_limit(&trimmed_lines, max_output_bytes);
-    final_output_lines.extend_from_slice(&trimmed_lines[..cut_idx]);
+    if let Some(kept) = trimmed_lines.get(..cut_idx) {
+        final_output_lines.extend_from_slice(kept);
+    }
 
-    let remaining_matches = count_matches(&trimmed_lines[cut_idx..]);
+    let remaining_matches = count_matches(trimmed_lines.get(cut_idx..).unwrap_or(&[]));
     if remaining_matches > 0 {
         final_output_lines.push(format!(
             "... [{}{} lines truncated] ...",
@@ -1407,7 +1383,9 @@ pub fn format_files_with_matches_output(
         .collect();
 
     let cut_idx = first_idx_exceed_cum_limit(&trimmed_lines, max_output_bytes);
-    final_output_lines.extend_from_slice(&trimmed_lines[..cut_idx]);
+    if let Some(kept) = trimmed_lines.get(..cut_idx) {
+        final_output_lines.extend_from_slice(kept);
+    }
 
     if output_lines.len() > cut_idx {
         final_output_lines.push(format!(
@@ -1450,7 +1428,9 @@ pub fn format_count_output(
         .collect();
 
     let cut_idx = first_idx_exceed_cum_limit(&trimmed_lines, max_output_bytes);
-    final_output_lines.extend_from_slice(&trimmed_lines[..cut_idx]);
+    if let Some(kept) = trimmed_lines.get(..cut_idx) {
+        final_output_lines.extend_from_slice(kept);
+    }
 
     if output_lines.len() > cut_idx {
         final_output_lines.push(format!(
@@ -1497,20 +1477,42 @@ mod tests {
     #[test]
     fn grep_bool_flags_schema_is_plain_boolean_with_default_false() {
         let schema = serde_json::to_value(schemars::schema_for!(GrepSearchInput)).unwrap();
-        let props = &schema["properties"];
+        let Some(props) = schema.get("properties") else {
+            panic!("schema missing properties: {schema}");
+        };
 
         // Field is renamed to "-i" for the model-facing name.
-        let case = &props["-i"];
-        assert_eq!(case["type"], "boolean", "case_insensitive schema: {case}");
-        assert_eq!(case["default"], false, "case_insensitive schema: {case}");
+        let Some(case) = props.get("-i") else {
+            panic!("schema missing -i: {props}");
+        };
+        assert_eq!(
+            case.get("type").and_then(|v| v.as_str()),
+            Some("boolean"),
+            "case_insensitive schema: {case}"
+        );
+        assert_eq!(
+            case.get("default").and_then(|v| v.as_bool()),
+            Some(false),
+            "case_insensitive schema: {case}"
+        );
         assert!(
             case.get("anyOf").is_none(),
             "must not use nullable anyOf: {case}"
         );
 
-        let multi = &props["multiline"];
-        assert_eq!(multi["type"], "boolean", "multiline schema: {multi}");
-        assert_eq!(multi["default"], false, "multiline schema: {multi}");
+        let Some(multi) = props.get("multiline") else {
+            panic!("schema missing multiline: {props}");
+        };
+        assert_eq!(
+            multi.get("type").and_then(|v| v.as_str()),
+            Some("boolean"),
+            "multiline schema: {multi}"
+        );
+        assert_eq!(
+            multi.get("default").and_then(|v| v.as_bool()),
+            Some(false),
+            "multiline schema: {multi}"
+        );
         assert!(
             multi.get("anyOf").is_none(),
             "must not use nullable anyOf: {multi}"
@@ -1625,12 +1627,17 @@ mod tests {
         .collect();
 
         let matches = parse_file_matches(&lines, DEFAULT_MAX_CHARS_PER_LINE);
-        assert_eq!(matches.len(), 2);
-        assert_eq!(matches[0].path, "src/main.rs");
-        assert_eq!(matches[0].matches.len(), 2);
-        assert_eq!(matches[0].matches[0].line_number, 10);
-        assert_eq!(matches[1].path, "src/lib.rs");
-        assert_eq!(matches[1].matches.len(), 1);
+        let [first, second] = matches.as_slice() else {
+            panic!("expected two file matches: {matches:?}");
+        };
+        assert_eq!(first.path, "src/main.rs");
+        assert_eq!(first.matches.len(), 2);
+        let Some(first_hit) = first.matches.first() else {
+            panic!("expected a match in first file: {:?}", first.matches);
+        };
+        assert_eq!(first_hit.line_number, 10);
+        assert_eq!(second.path, "src/lib.rs");
+        assert_eq!(second.matches.len(), 1);
     }
 
     #[test]
@@ -2028,12 +2035,9 @@ mod tests {
         );
     }
 
-    /// A result whose rg output-line count exactly equals `head_limit` is
-    /// complete, not truncated: early-stop reads one line past the budget, so an
-    /// exact-fit search reaches EOF without tripping the cap. Regression against
-    /// the early-stop path over-reporting "at least N" on an exact fit.
-    /// (Grouped rg output for one file = 1 heading line + K match lines, so
-    /// `head_limit = K + 1` is the exact fit.)
+    /// A result whose rg output-line count exactly equals `head_limit` is complete, not truncated: early-stop reads one line past the budget, so an
+    /// exact-fit search reaches EOF without tripping the cap. Regression against the early-stop path over-reporting "at least N" on an exact fit.
+    /// (Grouped rg output for one file = 1 heading line + K match lines, so `head_limit = K + 1` is the exact fit.)
     #[tokio::test]
     async fn tool_grep_head_limit_exact_fit_not_truncated() {
         let tmp = TempDir::new().unwrap();
@@ -2174,10 +2178,8 @@ mod tests {
         assert!(stdout.contains("secret_value"));
     }
 
-    // ─── Streaming (GrepTool::execute) tests ───
-    //
-    // `test_ctx` stamps `WorkspaceViewerContext { stream_tool_progress: true }`,
-    // so these exercise the streaming path.
+    // ─── Streaming (GrepTool::execute) tests ─── `test_ctx` stamps `WorkspaceViewerContext {
+    // stream_tool_progress: true }`, so these exercise the streaming path.
 
     /// Destructure a `grep_match_chunk` payload, asserting the canonical
     /// `plain_text` / `append` envelope. Returns the `delta`.
@@ -2185,17 +2187,19 @@ mod tests {
         match p {
             xai_tool_runtime::ToolProgress::Custom { subkind, payload } => {
                 assert_eq!(subkind, "grep_match_chunk", "unexpected subkind");
-                payload["delta"].as_str().unwrap().to_owned()
+                payload
+                    .get("delta")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_else(|| panic!("payload missing delta: {payload}"))
+                    .to_owned()
             }
             other => panic!("expected Custom progress, got {other:?}"),
         }
     }
 
-    /// Drive a `BodyStreamer` over `raw` (one synthetic read + flush) and return
-    /// the concatenation of every emitted delta — i.e. the streamed card body.
-    /// Feeding the whole buffer at once is equivalent to chunked feeds (the
-    /// pending buffer stitches partial lines), so this exercises the same
-    /// projection `execute` runs incrementally.
+    /// Drive a `BodyStreamer` over `raw` (one synthetic read + flush) and return the concatenation of every emitted delta —
+    /// i.e. the streamed card body. Feeding the whole buffer at once is equivalent to chunked feeds (the pending buffer
+    /// stitches partial lines), so this exercises the same projection `execute` runs incrementally.
     fn stream_body(raw: &[u8], config: &GrepFormatConfig) -> String {
         let spec = GREP_CAPABILITIES.streaming.as_ref().unwrap();
         let mut streamer = BodyStreamer::new(spec, config);
@@ -2209,13 +2213,14 @@ mod tests {
         body
     }
 
-    /// Extract the card *body* from a `finalize_grep` card by string slicing
-    /// (NOT `str::lines()`, which would strip a trailing `\r` off a body line and
-    /// thereby hide the very divergence these tests guard). Drops the
-    /// `<workspace_result>` wrapper, the "Found …" summary (first line), and an
+    /// Extract the card *body* from a `finalize_grep` card by string slicing (NOT `str::lines()`, which would strip a trailing `\r` off a body line
+    /// and thereby hide the very divergence these tests guard). Drops the `<workspace_result>` wrapper, the "Found …" summary (first line), and an
     /// optional `... [N lines truncated] ...` footer (last line).
     fn card_body(card: &str) -> String {
-        let after_open = &card[card.find('\n').expect("wrapper newline") + 1..];
+        let nl = card.find('\n').expect("wrapper newline");
+        let Some(after_open) = card.get(nl + 1..) else {
+            panic!("wrapper newline not a char boundary");
+        };
         let formatted = after_open
             .strip_suffix("\n</workspace_result>")
             .expect("wrapper close");
@@ -2285,7 +2290,7 @@ mod tests {
         let chunk = b"a\nb\nc\nd\n";
         let (n, hit) = accept_rg_stdout_chunk(chunk, 0, 0, 2);
         assert!(hit);
-        assert_eq!(&chunk[..n], b"a\nb\n");
+        assert_eq!(chunk.get(..n), Some(b"a\nb\n".as_slice()));
     }
 
     #[test]
@@ -2314,7 +2319,7 @@ mod tests {
         // room — actually 2 bytes fits "é" exactly.
         let (n2, hit2) = accept_rg_stdout_chunk(chunk, MAX_STDOUT_BYTES - 2, 0, 100);
         assert!(hit2);
-        assert_eq!(&chunk[..n2], "é".as_bytes());
+        assert_eq!(chunk.get(..n2), Some("é".as_bytes()));
     }
 
     #[test]
@@ -2323,15 +2328,17 @@ mod tests {
         let chunk = "café\nmore\n".as_bytes();
         let (n, hit) = accept_rg_stdout_chunk(chunk, 0, 0, 1);
         assert!(hit);
-        assert_eq!(&chunk[..n], "café\n".as_bytes());
-        assert!(std::str::from_utf8(&chunk[..n]).is_ok());
+        assert_eq!(chunk.get(..n), Some("café\n".as_bytes()));
+        assert!(
+            chunk
+                .get(..n)
+                .is_some_and(|b| std::str::from_utf8(b).is_ok())
+        );
     }
 
-    /// Regression: a stdout truncation landing mid-CRLF leaves a final
-    /// segment with no trailing `\n` that ends in `\r`. `str::lines()` (used by
-    /// `finalize_grep`) keeps that `\r`, so the streamed body must too — the final
-    /// flush must NOT strip it. (Without the fix the streamed body would drop the
-    /// `\r` and diverge from the terminal card body by one byte.)
+    /// Regression: a stdout truncation landing mid-CRLF leaves a final segment with no trailing `\n` that ends in `\r`. `str::lines()` (used by
+    /// `finalize_grep`) keeps that `\r`, so the streamed body must too — the final flush must NOT strip it. (Without the fix the streamed body
+    /// would drop the `\r` and diverge from the terminal card body by one byte.)
     #[test]
     fn body_streamer_keeps_final_crlf_segment_like_str_lines() {
         // Last segment "3:gamma\r" has no trailing '\n' (truncated mid-CRLF).
@@ -2415,10 +2422,9 @@ mod tests {
         assert_eq!(stream_body(count_raw, &count_cfg), card_body(&count_card));
     }
 
-    /// Streamed-vs-terminal contract: the concatenation of the
-    /// per-match-line deltas equals the terminal card *body* (prefix mode), while
-    /// the terminal result additionally carries the `<workspace_result …>`
-    /// wrapper and the "Found N …" summary (terminal-only footer).
+    /// Streamed-vs-terminal contract: the concatenation of the per-match-line deltas equals the
+    /// terminal card *body* (prefix mode), while the terminal result additionally carries the
+    /// `<workspace_result …>` wrapper and the "Found N …" summary (terminal-only footer).
     #[tokio::test]
     async fn grep_streaming_body_matches_card_body() {
         use futures::StreamExt;
@@ -2479,7 +2485,13 @@ mod tests {
         // the summary (line 1) and the closing wrapper (last line) — with neither
         // the wrapper nor the "Found N …" summary.
         let card_lines: Vec<&str> = card.lines().collect();
-        let body_from_card = card_lines[2..card_lines.len() - 1].join("\n");
+        let Some(end) = card_lines.len().checked_sub(1) else {
+            panic!("card too short: {card_lines:?}");
+        };
+        let Some(body_lines) = card_lines.get(2..end) else {
+            panic!("card missing body: {card_lines:?}");
+        };
+        let body_from_card = body_lines.join("\n");
         assert_eq!(
             deltas, body_from_card,
             "accumulated deltas must equal the terminal card body"
@@ -2542,10 +2554,9 @@ mod tests {
         assert!(card.contains("findme"), "card: {card}");
     }
 
-    /// Streaming invariant under a hit `head_limit`: even when the budget trips
-    /// mid-stream (so the early-stop / exact-fit probe path runs), the
-    /// accumulated deltas must still equal the terminal card body. Regression
-    /// against feeding the streamer bytes clobbered by the probe's read.
+    /// Streaming invariant under a hit `head_limit`: even when the budget trips mid-stream (so the early-stop / exact-fit
+    /// probe path runs), the accumulated deltas must still equal the terminal card body. Regression against feeding the
+    /// streamer bytes clobbered by the probe's read.
     #[tokio::test]
     async fn grep_streaming_body_matches_card_body_when_truncated() {
         use futures::StreamExt;
@@ -2586,7 +2597,13 @@ mod tests {
             .expect("grep terminal ok");
         let card = String::from_utf8_lossy(&output.stdout);
         let card_lines: Vec<&str> = card.lines().collect();
-        let body_from_card = card_lines[2..card_lines.len() - 1].join("\n");
+        let Some(end) = card_lines.len().checked_sub(1) else {
+            panic!("card too short: {card_lines:?}");
+        };
+        let Some(body_lines) = card_lines.get(2..end) else {
+            panic!("card missing body: {card_lines:?}");
+        };
+        let body_from_card = body_lines.join("\n");
         assert_eq!(
             deltas, body_from_card,
             "accumulated deltas must equal the terminal card body even when truncated"

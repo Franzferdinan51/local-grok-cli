@@ -868,8 +868,11 @@ mod tests {
             entries,
             duplicate_names: BTreeMap::new(),
         };
-        assert_eq!(registry.list().len(), 1);
-        assert_eq!(registry.list()[0].source, "builtin");
+        let listed = registry.list();
+        let [first] = listed.as_slice() else {
+            panic!("expected one listing: {listed:?}");
+        };
+        assert_eq!(first.source, "builtin");
         assert_eq!(
             registry.resolve_by_name("same").unwrap().source,
             WorkflowSource::Builtin
@@ -974,9 +977,13 @@ mod tests {
         std::fs::create_dir_all(&project).unwrap();
         symlink(&project, &linked).unwrap();
         let path = save_project_workflow(&linked, "safe", &script("safe")).unwrap();
+        // GROK_LOCAL: macOS TMPDIR lives under /var -> /private/var, so
+        // canonicalize both sides (no-op on Linux).
         assert_eq!(
-            dunce::canonicalize(path).unwrap(),
-            project.join(".grok/workflows/safe.rhai")
+            dunce::canonicalize(&path).unwrap(),
+            dunce::canonicalize(&project)
+                .unwrap()
+                .join(".grok/workflows/safe.rhai")
         );
     }
 

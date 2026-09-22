@@ -55,17 +55,8 @@ pub(crate) fn resolve_session_toolset(
     )?;
     Ok((effective, toolset, terminal_backend))
 }
-/// Entry point for toolset rebuilds: runs steps 2-5 of the resolution pipeline around an existing session-owned terminal backend.
-/// The parameter is non-optional on purpose: every toolset-swap call site must state which backend it rebuilds around.
-/// Otherwise a resolve could silently build a fresh backend and orphan background tasks and shell state.
-///
-/// Returns the *unmodified* `effective_tool_config` (step-1 baseline) so the caller can store it on the session.
-/// The FinalizedToolset reflects MCP and hub merging and capability filtering on top of that baseline.
-///
-/// **MCP-origin and hub-origin `kind: None` tools are dropped under every non-`All` mode.**
-/// Baseline `kind: None` tools are always kept.
-/// Kind-less baseline entries whose id the binary's registry knows get their [`ToolKind`] backfilled before filtering (see [`backfill_tool_kinds`]).
-/// That backfill lets the capability filter apply to pinned server-bind toolsets whose wire entries cannot carry a kind.
+/// Toolset rebuild around an existing session-owned terminal backend. The backend is required so a resolve cannot orphan shell state by building a fresh one.
+/// Returns the unmodified baseline config; the finalized set is MCP/hub merge plus capability filter. External `kind: None` drops outside `All`; known baseline ids are backfilled first.
 pub(crate) fn resolve_session_toolset_rebuild(
     effective_tool_config: ToolServerConfig,
     capability_mode: CapabilityMode,
@@ -146,14 +137,8 @@ fn backfill_tool_kinds(
         behavior_preset: config.behavior_preset.clone(),
     }
 }
-/// Steps 2-4 of the resolution pipeline, without step 5 (`finalize`):
-///
-/// - **Step 2** (MCP merge): append MCP-origin tools, skipping ID/name collisions with baseline.
-/// - **Step 3** (Hub merge): append hub-origin tools, skipping ID/name collisions with baseline or MCP.
-/// - **Step 4** (Capability filter): drop tools whose `kind` is not allowed by the mode.
-///   External (MCP/hub) `kind: None` tools are only kept under `CapabilityMode::All`.
-///
-/// Priority on ID/name collision: baseline wins over MCP, and MCP wins over hub.
+/// Steps 2-4 without finalize: append MCP then hub, skipping ID/name collisions. Baseline wins over MCP, MCP over hub.
+/// Capability filter drops disallowed kinds; external `kind: None` is kept only under `CapabilityMode::All`.
 pub(crate) fn merge_and_filter(
     baseline: &ToolServerConfig,
     mcp_snapshot: &[ToolConfig],
@@ -249,11 +234,8 @@ pub type NoopSessionContextFactory = WorkspaceSessionContextFactory;
 pub fn tool_state_enabled() -> bool {
     std::env::var("GROK_WORKSPACE_TOOL_STATE_ENABLED").as_deref() == Ok("true")
 }
-/// Sanitize a `session_id` into a single safe filesystem path segment: chars outside `[A-Za-z0-9_-]` become `_`, empty becomes `anon`.
-/// When any replacement happened, an 8-hex digest of the ORIGINAL id is appended so the mapping stays injective.
-/// Plain substitution would collide distinct ids (`sess/1` and `sess_1`) into one directory.
-/// That would cross-contaminate persistence, rehydration, and [`crate::recovery::cleanup_stale_sessions`].
-/// Already-safe ids (the common UUID case) map to themselves.
+/// Sanitize `session_id` into one path segment. Replacements append a digest of the original id so distinct ids cannot collide into one directory.
+/// A collision would cross-contaminate persistence and cleanup. Already-safe ids map to themselves.
 fn sanitize_session_id(session_id: &str) -> String {
     let mut safe = String::with_capacity(session_id.len());
     let mut modified = false;
@@ -272,7 +254,9 @@ fn sanitize_session_id(session_id: &str) -> String {
     if modified {
         let digest = xai_file_utils::sha256_hex(session_id.as_bytes());
         safe.push('-');
-        safe.push_str(&digest[..8]);
+        if let Some(prefix) = digest.get(..8) {
+            safe.push_str(prefix);
+        }
     }
     safe
 }
@@ -287,26 +271,20 @@ fn ensure_session_dir(root: &std::path::Path, session_id: &str) -> (PathBuf, std
 /// The hazard is the global `environ` array, not the variable's value.
 #[cfg(test)]
 pub(crate) use crate::ENV_TEST_LOCK as TOOL_STATE_ENV_LOCK;
-/// With an [`AuthProvider`] and API base URL, gen tools (image_gen, video_gen) are enabled using the provider's current OAuth token.
-/// Without auth, gen tools default to `Disabled`.
-///
-/// When [`with_tool_state_home`](Self::with_tool_state_home) is set, [`SessionContext::state_path`] is rooted at `<home>/sessions/<session_id>/`.
-/// Left unset, `state_path` stays empty (legacy behavior).
-///
-/// [`SessionContext::session_folder`] is `/tmp/sessions/<sanitized_id>/` (terminal logs and other tool artifacts, not the project `cwd`).
-///
-/// Terminal backends are persistent-shell [`LocalTerminalBackend`]s, built once per session by [`build_terminal_backend`].
-/// The same backend is passed into every [`build_session_context`] call.
-///
-/// [`build_terminal_backend`]: crate::config::SessionContextFactory::build_terminal_backend
-/// [`build_session_context`]: crate::config::SessionContextFactory::build_session_context
-/// [`LocalTerminalBackend`]: xai_grok_tools::computer::local::LocalTerminalBackend
+/// Every tool id this binary's registry knows. Built once: a `ToolRegistryBuilder` is not free and binds consult it.
+static REGISTRY_TOOL_IDS: std::sync::LazyLock<Arc<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(|| Arc::new(ToolRegistryBuilder::new().known_tool_ids()));
+/// Gen tools enable only with an [`AuthProvider`] and API base URL; otherwise they stay `Disabled`.
+/// `state_path` is `<home>/sessions/<session_id>/` only when set; `session_folder` is `/tmp/sessions/…`, not the project cwd.
+/// The persistent-shell backend is built once per session and reused on every context build.
 pub struct WorkspaceSessionContextFactory {
     auth: Option<xai_computer_hub_sdk::SharedAuthProvider>,
     api_base_url: Option<String>,
     /// Resolved `$GROK_WORKSPACE_HOME` when tool-state persistence is enabled; `None` disables it.
     /// Resolved once by the caller so the factory performs no per-build env reads.
     tool_state_home: Option<PathBuf>,
+    /// The ids a pinned bind may name and this factory will serve.
+    served_tool_ids: Arc<std::collections::HashSet<String>>,
 }
 impl Default for WorkspaceSessionContextFactory {
     fn default() -> Self {
@@ -319,6 +297,7 @@ impl WorkspaceSessionContextFactory {
             auth: None,
             api_base_url: None,
             tool_state_home: None,
+            served_tool_ids: REGISTRY_TOOL_IDS.clone(),
         }
     }
     /// Factory with auth: gen tools use the provider's live token.
@@ -327,6 +306,22 @@ impl WorkspaceSessionContextFactory {
             auth: Some(auth),
             api_base_url: Some(api_base_url),
             tool_state_home: None,
+            served_tool_ids: REGISTRY_TOOL_IDS.clone(),
+        }
+    }
+    /// Factory for a host whose credential only serves the hub. Sessions get no credential, and the
+    /// tools that would call the API with one are not served even when a bind pins them: they come
+    /// back to the binder as `unserved_tool_ids` instead of registering without a client.
+    pub fn hub_only() -> Self {
+        let api_backed = xai_grok_agent::api_backed_tool_ids();
+        let served = REGISTRY_TOOL_IDS
+            .iter()
+            .filter(|id| !api_backed.contains(*id))
+            .cloned()
+            .collect();
+        WorkspaceSessionContextFactory {
+            served_tool_ids: Arc::new(served),
+            ..WorkspaceSessionContextFactory::new()
         }
     }
     /// Enable session-keyed tool-state persistence rooted at `home` (`$GROK_WORKSPACE_HOME`).
@@ -394,7 +389,7 @@ impl SessionContextFactory for WorkspaceSessionContextFactory {
                         let headers = build_proxy_headers(url);
                         (
                             ImageGenConfig::Enabled {
-                                api_key: token.clone(),
+                                api_key: Some(token.clone()),
                                 base_url: url.clone(),
                                 extra_headers: headers.clone(),
                                 image_gen_enabled: true,
@@ -404,7 +399,7 @@ impl SessionContextFactory for WorkspaceSessionContextFactory {
                                 tier_restricted: false,
                             },
                             VideoGenConfig::Enabled {
-                                api_key: token.clone(),
+                                api_key: Some(token.clone()),
                                 base_url: url.clone(),
                                 extra_headers: headers.clone(),
                                 zdr_video_output_s3: None,
@@ -464,9 +459,7 @@ impl SessionContextFactory for WorkspaceSessionContextFactory {
         ToolRegistryBuilder::new()
     }
     fn known_tool_ids(&self) -> Arc<std::collections::HashSet<String>> {
-        static IDS: std::sync::LazyLock<Arc<std::collections::HashSet<String>>> =
-            std::sync::LazyLock::new(|| Arc::new(ToolRegistryBuilder::new().known_tool_ids()));
-        IDS.clone()
+        self.served_tool_ids.clone()
     }
 }
 /// Build extra headers for API calls routed through the chat proxy.

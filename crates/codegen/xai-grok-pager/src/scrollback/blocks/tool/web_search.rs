@@ -89,11 +89,7 @@ impl WebSearchToolCallBlock {
         })
     }
 
-    /// Render the header line: **Web Search** `query` `(N sources)`
-    ///
-    /// In collapsed mode (`max_width` is `Some`), it reserves space for the source-count suffix and truncates the query to fit.
-    /// The suffix is therefore always visible.
-    /// In expanded mode (`None`), it renders the full query with no suffix.
+    /// Render the header line: Web Search `query` `(N sources)`. The suffix is therefore always visible.
     fn header_line(&self, theme: &Theme, muted: bool, max_width: Option<usize>) -> Line<'static> {
         let text_style = if muted {
             theme.muted()
@@ -174,7 +170,6 @@ impl WebSearchToolCallBlock {
     }
 
     /// Build the sources summary line from citations.
-    ///
     /// Extracts domain names from URLs and renders a compact one-liner:
     /// `Sources: stripe.com, react.dev, stackoverflow.com (+2 more)`
     fn sources_line(&self, theme: &Theme) -> Option<Line<'static>> {
@@ -297,13 +292,15 @@ impl BlockContent for WebSearchToolCallBlock {
                         .push(BlockLine::from(Line::from("")).with_panel_background(theme.bg_dark));
                 } else if let Some(ref err) = self.error {
                     lines.push(Line::from("").into());
-                    lines.push(
-                        Line::from(Span::styled(
-                            format!("  {err}"),
-                            theme.fg(theme.accent_error),
-                        ))
-                        .into(),
-                    );
+                    for line in err.lines() {
+                        lines.push(
+                            Line::from(Span::styled(
+                                format!("  {line}"),
+                                theme.fg(theme.accent_error),
+                            ))
+                            .into(),
+                        );
+                    }
                 } else if !self.is_x_search {
                     lines.push(Line::from("").into());
                     lines.push(Line::from(Span::styled("  (no content)", theme.muted())).into());
@@ -357,8 +354,9 @@ impl BlockContent for WebSearchToolCallBlock {
         false
     }
 
+    // A failed search folds open to show its reason
     fn is_foldable(&self) -> bool {
-        self.error.is_none() && self.content.is_some() && !self.is_x_search
+        (self.content.is_some() || self.error.is_some()) && !self.is_x_search
     }
 
     fn default_display_mode(&self) -> DisplayMode {
@@ -410,6 +408,15 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn failed_search_folds_open_to_show_its_reason() {
+        let block = WebSearchToolCallBlock::new("weather").with_error("user rejected");
+
+        assert!(block.is_foldable());
+        assert!(rendered_text(&block, DisplayMode::Expanded).contains("user rejected"));
+        assert!(!WebSearchToolCallBlock::new("weather").is_foldable());
     }
 
     #[test]

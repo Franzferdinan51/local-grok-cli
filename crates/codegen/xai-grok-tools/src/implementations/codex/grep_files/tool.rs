@@ -56,13 +56,9 @@ pub struct CodexGrepFilesInput {
 
 // ─── Tool ───────────────────────────────────────────────────────────
 
-/// Codex-namespace grep_files tool — file-path-only regex search.
-///
-/// Shares `ToolKind::Search` with the grok-build `GrepTool`. These tools are
-/// namespace-exclusive — consumers enable either `GrokBuild` or `Codex` search,
-/// never both simultaneously. This follows the same pattern as
-/// `CodexListDirTool`/`ListDirTool` (`ToolKind::ListDir`) and
-/// `CodexReadFileTool`/`ReadFileImpl` (`ToolKind::Read`).
+/// Codex-namespace grep_files tool — file-path-only regex search. Shares `ToolKind::Search` with the grok-build `GrepTool`. These tools are
+/// namespace-exclusive — consumers enable either `GrokBuild` or `Codex` search, never both simultaneously. This follows the same pattern as
+/// `CodexListDirTool`/`ListDirTool` (`ToolKind::ListDir`) and `CodexReadFileTool`/`ReadFileImpl` (`ToolKind::Read`).
 #[derive(Debug, Default)]
 pub struct CodexGrepFilesTool;
 
@@ -333,7 +329,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(results.len(), 1);
-        assert!(results[0].contains("match.rs"));
+        assert!(results.first().is_some_and(|r| r.contains("match.rs")));
     }
 
     #[tokio::test]
@@ -349,7 +345,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(results.len(), 1);
-        assert!(results[0].contains("alpha.rs"));
+        assert!(results.first().is_some_and(|r| r.contains("alpha.rs")));
     }
 
     #[tokio::test]

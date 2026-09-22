@@ -11,6 +11,27 @@ use std::path::PathBuf;
 use std::time::Instant;
 use xai_grok_shell::extensions::notification::RetryState;
 use xai_grok_shell::extensions::notification::SessionUpdate as XaiSessionUpdate;
+pub(super) fn test_agent(app: &AppView, id: AgentId) -> &AgentView {
+    let Some(agent) = app.agents.get(&id) else {
+        panic!("expected agent {id:?}");
+    };
+    agent
+}
+pub(super) fn test_subagent<'a>(parent: &'a AgentView, sid: &str) -> &'a AgentView {
+    let Some(child) = parent.subagent_views.get(sid) else {
+        panic!("expected subagent {sid}");
+    };
+    child.as_ref()
+}
+pub(super) fn json_set(
+    value: &mut serde_json::Value,
+    key: impl Into<String>,
+    v: serde_json::Value,
+) {
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(key.into(), v);
+    }
+}
 pub(super) fn make_session(session_id: Option<&str>) -> AgentSession {
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     AgentSession {
@@ -75,40 +96,46 @@ pub(super) fn recap_block(text: &str) -> RenderBlock {
     })
 }
 pub(super) fn make_subagent_info(child_sid: &str) -> SubagentInfo {
+    let now = Instant::now();
     SubagentInfo {
         subagent_id: Arc::from(format!("sa-{child_sid}")),
         child_session_id: Arc::from(child_sid),
         description: Arc::from("test"),
         subagent_type: Arc::from("general-purpose"),
-        persona: None,
-        role: None,
-        model: None,
-        context_source: None,
-        resumed_from: None,
-        capability_mode: None,
-        workflow_run_id: None,
-        context_normalized: false,
-        parent_prompt_id: None,
-        started_at: Instant::now(),
-        last_progress_at: Instant::now(),
-        finished: false,
-        status: None,
-        error: None,
-        duration_ms: None,
-        tool_calls: None,
-        turns: None,
-        turn_count: None,
-        tool_call_count: None,
-        tokens_used: None,
-        context_window_tokens: Some(131072),
-        context_usage_pct: Some(85),
-        tools_used: Vec::new(),
-        error_count: None,
-        activity_label: None,
-        is_background: false,
-        pending_kill: false,
-        kill_requested_at: None,
-        scrollback_entry_id: None,
+        attempt: crate::app::subagent::SubagentAttemptInfo {
+            lifecycle: crate::app::subagent::SubagentLifecycleState::running_legacy_for_test(),
+            persona: None,
+            role: None,
+            model: None,
+            context_source: None,
+            resumed_from: None,
+            capability_mode: None,
+            workflow_run_id: None,
+            context_normalized: false,
+            parent_prompt_id: None,
+            started_at: now,
+            last_progress_at: now,
+            status: None,
+            error: None,
+            duration_ms: None,
+            tool_calls: None,
+            turns: None,
+            turn_count: None,
+            tool_call_count: None,
+            tokens_used: None,
+            context_window_tokens: Some(131072),
+            context_usage_pct: Some(85),
+            tools_used: Vec::new(),
+            error_count: None,
+            activity_label: None,
+            is_background: false,
+            pending_kill: false,
+            kill_requested_at: None,
+            scrollback_entry_id: None,
+            terminal_entry_id: None,
+        },
+        completed_attempt_tokens: 0,
+        sealed_attempt_tokens: Default::default(),
         prompt: None,
         child_cwd: None,
         worktree_path: None,
@@ -181,7 +208,12 @@ pub(super) fn last_session_event(sb: &ScrollbackState) -> Option<SessionEvent> {
 }
 pub(super) fn make_app_with_agent(session_id: &str) -> AppView {
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    let mut app = AppView::new(tx.clone(), ModelState::default(), Vec::new());
+    let mut app = AppView::new(
+        tx.clone(),
+        ModelState::default(),
+        Vec::new(),
+        crate::render::draw::EscapeWriter::disconnected(),
+    );
     app.leader_mode = true;
     let id = AgentId(0);
     let agent = make_agent(Some(session_id));
@@ -335,6 +367,32 @@ pub(super) fn collapsed_edit_blocks_settings_update(
         std::sync::Arc::from(serde_json::value::to_raw_value(&params).unwrap()),
     )
 }
+pub(super) fn subagent_notification_with_event_id(
+    session_id: &str,
+    update: XaiSessionUpdate,
+    event_id: Option<&str>,
+) -> acp::ExtNotification {
+    let payload = SessionNotification {
+        session_id: acp::SessionId::new(session_id),
+        update,
+        meta: event_id.map(|event_id| serde_json::json!({ "eventId": event_id })),
+    };
+    acp::ExtNotification::new(
+        "x.ai/session_notification",
+        std::sync::Arc::from(serde_json::value::to_raw_value(&payload).unwrap()),
+    )
+}
+pub(super) fn subagent_notification_with_seq(
+    session_id: &str,
+    update: XaiSessionUpdate,
+    event_seq: u64,
+) -> acp::ExtNotification {
+    subagent_notification_with_event_id(
+        session_id,
+        update,
+        Some(&format!("{session_id}-{event_seq}")),
+    )
+}
 pub(super) fn subagent_ext_replay(
     session_id: &str,
     update: serde_json::Value,
@@ -457,16 +515,20 @@ pub(super) fn queue_changed_running_ex(
         .collect();
     let mut params = serde_json::json!({ "sessionId": session_id, "entries": entries });
     if let Some(r) = running {
-        params["runningPromptId"] = serde_json::Value::String(r.to_string());
+        json_set(
+            &mut params,
+            "runningPromptId",
+            serde_json::Value::String(r.to_string()),
+        );
     }
     if let Some(t) = running_text {
-        params["runningText"] = serde_json::Value::String(t.to_string());
+        json_set(&mut params, "runningText", serde_json::Value::String(t.to_string()));
     }
     if let Some(k) = running_kind {
-        params["runningKind"] = serde_json::Value::String(k.to_string());
+        json_set(&mut params, "runningKind", serde_json::Value::String(k.to_string()));
     }
     if let Some(segs) = running_combined_texts {
-        params["runningCombinedTexts"] = serde_json::json!(segs);
+        json_set(&mut params, "runningCombinedTexts", serde_json::json!(segs));
     }
     acp::ExtNotification::new(
         "x.ai/queue/changed",
@@ -499,7 +561,7 @@ pub(super) fn send_tool_call_update(
 ) {
     let mut meta = serde_json::json!({ "promptId": prompt_id });
     if let Some(eid) = event_id {
-        meta["eventId"] = serde_json::Value::String(eid.to_string());
+        json_set(&mut meta, "eventId", serde_json::Value::String(eid.to_string()));
     }
     let (tx, _rx) = tokio::sync::oneshot::channel();
     handle(
@@ -549,13 +611,6 @@ pub(super) fn tool_call_block_count(agent: &AgentView) -> usize {
         .filter(|e| matches!(&e.block, RenderBlock::ToolCall(_)))
         .count()
 }
-pub(super) fn make_inject_notif(payload: &serde_json::Value) -> acp::ExtNotification {
-    let raw = serde_json::value::to_raw_value(payload).unwrap();
-    acp::ExtNotification::new(
-        "x.ai/scheduled_task_inject_prompt",
-        std::sync::Arc::from(raw),
-    )
-}
 pub(super) fn make_fired_notif(
     session_id: &str,
     task_id: &str,
@@ -600,7 +655,12 @@ pub(super) fn make_fired_notif_with_subagent(
 /// Handlers that gate on `active_view` will mutate the wrong agent (or silently no-op).
 pub(super) fn make_app_two_agents() -> AppView {
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    let mut app = AppView::new(tx.clone(), ModelState::default(), Vec::new());
+    let mut app = AppView::new(
+        tx.clone(),
+        ModelState::default(),
+        Vec::new(),
+        crate::render::draw::EscapeWriter::disconnected(),
+    );
     let id0 = AgentId(0);
     let agent0 = make_agent(Some("sess-owner"));
     app.agents.insert(id0, agent0);
@@ -829,7 +889,7 @@ pub(super) fn plan_update_msg(
     })
 }
 pub(super) fn todo_contents(app: &AppView, id: AgentId) -> Vec<String> {
-    app.agents[&id].todo.todos().iter().map(|t| t.content.clone()).collect()
+    test_agent(app, id).todo.todos().iter().map(|t| t.content.clone()).collect()
 }
 pub(super) fn xai_model_switch_notif(
     session_id: &str,
@@ -917,14 +977,13 @@ pub(super) fn prompt_complete_ext_with_reason(
             "stopReason": stop_reason,
         });
     if let Some(r) = agent_result {
-        payload["agentResult"] = serde_json::json!(r);
+        json_set(&mut payload, "agentResult", serde_json::json!(r));
     }
     let raw = serde_json::value::to_raw_value(&payload).unwrap();
     acp::ExtNotification::new("x.ai/session/prompt_complete", std::sync::Arc::from(raw))
 }
 /// Failed `x.ai/session/prompt_complete` carrying the typed `errorKind`.
 /// Built through the typed [`PromptCompletePayload`] so the test wire shape can never drift from what `handle_prompt_complete` parses.
-/// Callers pass an `agent_result` with no canonical truncation text.
 /// A rail test therefore fails if its typed-kind read is deleted; the text fallback cannot mask it.
 pub(super) fn prompt_complete_ext_failed_with_error_kind(
     session_id: &str,
@@ -1136,7 +1195,7 @@ pub(super) fn xai_turn_completed_replay(
     let mut meta = serde_json::json!({ "isReplay": true });
     if let Some(obj) = extra_meta.as_object() {
         for (k, v) in obj {
-            meta[k] = v.clone();
+            json_set(&mut meta, k.clone(), v.clone());
         }
     }
     let payload = SessionNotification {
@@ -1220,7 +1279,7 @@ pub(super) fn xai_wake_turn_completed_notif(
 ) -> acp::ExtNotification {
     let mut meta = serde_json::json!({ "isReplay": false });
     if let Some(ms) = agent_timestamp_ms {
-        meta["agentTimestampMs"] = ms.into();
+        json_set(&mut meta, "agentTimestampMs", ms.into());
     }
     let payload = SessionNotification {
         session_id: acp::SessionId::new(session_id),
@@ -1282,39 +1341,6 @@ pub(super) fn xai_hook_execution_notif_with_runs(
         serde_json::value::to_raw_value(&payload).unwrap().into(),
     )
 }
-pub(super) fn xai_hook_execution_notif(
-    session_id: &str,
-    event_name: &str,
-    is_replay: bool,
-) -> acp::ExtNotification {
-    xai_hook_execution_notif_for_prompt(session_id, event_name, None, is_replay)
-}
-pub(super) fn count_lifecycle_blocks(
-    sb: &crate::scrollback::state::ScrollbackState,
-) -> usize {
-    use crate::scrollback::blocks::tool::ToolCallBlock;
-    (0..sb.len())
-        .filter(|i| {
-            matches!(
-                    sb.get(*i).map(|e| &e.block),
-                    Some(RenderBlock::ToolCall(ToolCallBlock::Lifecycle(_)))
-                )
-        })
-        .count()
-}
-/// Stop-hook groups on the last turn-terminal session-event marker, if any.
-pub(super) fn last_marker_stop_hook_groups(
-    sb: &crate::scrollback::state::ScrollbackState,
-) -> Option<usize> {
-    (0..sb.len())
-        .rev()
-        .find_map(|i| match sb.get(i).map(|e| &e.block) {
-            Some(RenderBlock::SessionEvent(b)) if b.event.is_turn_terminal() => {
-                Some(b.stop_hooks.len())
-            }
-            _ => None,
-        })
-}
 /// Work-only status lines ("N … still running") pushed as system rows.
 /// Never pushed in production; tests assert emptiness.
 pub(super) fn work_status_lines(sb: &ScrollbackState) -> Vec<String> {
@@ -1350,7 +1376,7 @@ pub(super) fn interjection_ext_with_id(
 ) -> acp::ExtNotification {
     let mut payload = serde_json::json!({ "sessionId": session_id, "text": text });
     if let Some(id) = interjection_id {
-        payload["interjectionId"] = serde_json::json!(id);
+        json_set(&mut payload, "interjectionId", serde_json::json!(id));
     }
     let raw = serde_json::value::to_raw_value(&payload).unwrap();
     acp::ExtNotification::new("x.ai/session/interjection", std::sync::Arc::from(raw))
@@ -1492,7 +1518,20 @@ pub(super) fn test_subagent_spawned(
     parent_sid: &str,
     child_sid: &str,
 ) -> XaiSessionUpdate {
-    test_subagent_spawned_for_workflow(parent_sid, child_sid, None)
+    test_subagent_spawned_for_attempt(parent_sid, child_sid, Some("at1.one"))
+}
+pub(super) fn test_subagent_spawned_for_attempt(
+    parent_sid: &str,
+    child_sid: &str,
+    attempt_id: Option<&str>,
+) -> XaiSessionUpdate {
+    let mut update = test_subagent_spawned_for_workflow(parent_sid, child_sid, None);
+    let XaiSessionUpdate::SubagentSpawned { attempt_id: wire_attempt, .. } = &mut update
+    else {
+        unreachable!();
+    };
+    *wire_attempt = attempt_id.map(str::to_owned);
+    update
 }
 pub(super) fn test_subagent_spawned_for_workflow(
     parent_sid: &str,
@@ -1501,6 +1540,7 @@ pub(super) fn test_subagent_spawned_for_workflow(
 ) -> XaiSessionUpdate {
     XaiSessionUpdate::SubagentSpawned {
         subagent_id: child_sid.into(),
+        attempt_id: Some("at1.one".into()),
         parent_session_id: parent_sid.into(),
         parent_prompt_id: None,
         child_session_id: child_sid.into(),
@@ -1514,11 +1554,19 @@ pub(super) fn test_subagent_spawned_for_workflow(
         role: None,
         model: None,
         resumed_from: None,
+        agent_address: None,
     }
 }
 pub(super) fn test_subagent_finished(child_sid: &str) -> XaiSessionUpdate {
+    test_subagent_finished_for_attempt(child_sid, Some("at1.one"))
+}
+pub(super) fn test_subagent_finished_for_attempt(
+    child_sid: &str,
+    attempt_id: Option<&str>,
+) -> XaiSessionUpdate {
     XaiSessionUpdate::SubagentFinished {
         subagent_id: child_sid.into(),
+        attempt_id: attempt_id.map(str::to_owned),
         child_session_id: child_sid.into(),
         status: "completed".into(),
         error: None,
@@ -1536,6 +1584,7 @@ pub(super) fn test_subagent_progress(
 ) -> XaiSessionUpdate {
     XaiSessionUpdate::SubagentProgress {
         subagent_id: child_sid.into(),
+        attempt_id: Some("at1.one".into()),
         parent_session_id: parent_sid.into(),
         child_session_id: child_sid.into(),
         duration_ms: 100,
@@ -1564,7 +1613,10 @@ pub(super) fn snapshot_after_subagent_spawn(
 ) -> SubagentSpawnSnapshot {
     let agent = app.agents.get(&AgentId(0)).unwrap();
     let info = agent.subagent_sessions.get(child_sid).unwrap();
-    let entry_id = info.scrollback_entry_id.expect("scrollback_entry_id after spawn");
+    let entry_id = info
+        .attempt
+        .scrollback_entry_id
+        .expect("scrollback_entry_id after spawn");
     let entry = agent.scrollback.get_by_id(entry_id).unwrap();
     let RenderBlock::Subagent(sb) = &entry.block else {
         panic!("expected Subagent block after spawn");
@@ -1576,7 +1628,7 @@ pub(super) fn snapshot_after_subagent_spawn(
         scrollback_len: agent.scrollback.len(),
         child_session_id: sb.child_session_id.clone(),
         block_kind: sb.kind.clone(),
-        scrollback_entry_id: info.scrollback_entry_id,
+        scrollback_entry_id: info.attempt.scrollback_entry_id,
     }
 }
 /// Snapshot after SubagentFinished for method-parity tests.
@@ -1594,17 +1646,20 @@ pub(super) fn snapshot_after_subagent_finish(
 ) -> SubagentFinishSnapshot {
     let agent = app.agents.get(&AgentId(0)).unwrap();
     let info = agent.subagent_sessions.get(child_sid).unwrap();
-    let entry_id = info.scrollback_entry_id.expect("scrollback_entry_id after finish");
+    let entry_id = info
+        .attempt
+        .scrollback_entry_id
+        .expect("scrollback_entry_id after finish");
     let entry = agent.scrollback.get_by_id(entry_id).unwrap();
     let RenderBlock::Subagent(sb) = &entry.block else {
         panic!("expected Subagent block after finish");
     };
     SubagentFinishSnapshot {
-        finished: info.finished,
-        status: info.status.as_ref().map(|s| s.to_string()),
-        tool_calls: info.tool_calls,
-        turns: info.turns,
-        duration_ms: info.duration_ms,
+        finished: info.is_finished(),
+        status: info.attempt.status.as_ref().map(|s| s.to_string()),
+        tool_calls: info.attempt.tool_calls,
+        turns: info.attempt.turns,
+        duration_ms: info.attempt.duration_ms,
         block_kind: sb.kind.clone(),
     }
 }
@@ -1733,7 +1788,7 @@ pub(super) fn write_subagent_meta_json(
     let json = format!(r#"{{"prompt":{}}}"#, serde_json::to_string(prompt).unwrap());
     std::fs::write(sessions_dir.join("meta.json"), json).unwrap();
 }
-/// The persisted echo of a task prompt wraps differently from the injected copy, so compare with internal whitespace collapsed.
+/// The echoed task prompt may wrap differently from the `meta.json` text, so compare with internal whitespace collapsed.
 fn subagent_prompt_text_eq(a: &str, b: &str) -> bool {
     a.split_whitespace().eq(b.split_whitespace())
 }
@@ -2014,7 +2069,7 @@ pub(super) fn make_app_with_parent_and_child(
     let agent = app.agents.get_mut(&AgentId(0)).unwrap();
     agent.subagent_sessions.insert(child_sid.into(), make_subagent_info(child_sid));
     let child_view = make_agent(Some(child_sid));
-    agent.subagent_views.insert(child_sid.into(), Box::new(child_view));
+    agent.insert_test_child(child_sid.into(), Box::new(child_view));
     app
 }
 pub(super) fn make_task_completed_notif(
@@ -2238,6 +2293,7 @@ pub(super) fn seed_owner_agent_with_open_modal(app: &mut AppView) {
             tools: Vec::new(),
             enabled: true,
             source: "local".into(),
+            blocked_reason: None,
             wire_source: McpWireSource::Local,
             plugin_name: None,
             is_managed_gateway: false,
@@ -2342,10 +2398,12 @@ mod queue_and_adoption;
 mod plan_mode;
 mod reconnect;
 mod turn_completion;
+mod hooks;
 mod interjection;
 mod session_routing;
 mod plugins;
 mod subagents;
+mod subagent_attempt_lifecycle;
 mod goals;
 mod interactions;
 mod background_tasks;

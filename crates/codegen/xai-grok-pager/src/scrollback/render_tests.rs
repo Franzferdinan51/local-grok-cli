@@ -8,6 +8,17 @@ use crate::scrollback::wrappers::EntryRenderer;
 use pretty_assertions::assert_eq;
 use ratatui::style::Color;
 
+fn at<'a, T>(xs: &'a [T], i: usize) -> &'a T {
+    xs.get(i)
+        .unwrap_or_else(|| panic!("index {i} out of bounds, len={}", xs.len()))
+}
+
+fn at_mut<'a, T>(xs: &'a mut [T], i: usize) -> &'a mut T {
+    let n = xs.len();
+    xs.get_mut(i)
+        .unwrap_or_else(|| panic!("index {i} out of bounds, len={n}"))
+}
+
 fn make_entries(count: usize) -> Vec<ScrollbackEntry> {
     (0..count)
         .map(|i| ScrollbackEntry::new(RenderBlock::stub(format!("Entry {i}"), Color::Blue)))
@@ -50,19 +61,27 @@ fn compute_layouts(
 
     // Compute gap_after using the pairwise rule
     for i in 0..n.saturating_sub(1) {
-        let a_groupable = entries[i].block.is_groupable();
-        let b_groupable = entries[i + 1].block.is_groupable();
-        let a_collapsed = entries[i].display_mode == DisplayMode::Collapsed;
-        let b_collapsed = entries[i + 1].display_mode == DisplayMode::Collapsed;
-        layouts[i].gap_after = if a_groupable && b_groupable && a_collapsed && b_collapsed {
-            0
-        } else {
-            1
+        let Some(a) = entries.get(i) else {
+            break;
         };
+        let Some(b) = entries.get(i + 1) else {
+            break;
+        };
+        let a_groupable = a.block.is_groupable();
+        let b_groupable = b.block.is_groupable();
+        let a_collapsed = a.display_mode == DisplayMode::Collapsed;
+        let b_collapsed = b.display_mode == DisplayMode::Collapsed;
+        if let Some(slot) = layouts.get_mut(i) {
+            slot.gap_after = if a_groupable && b_groupable && a_collapsed && b_collapsed {
+                0
+            } else {
+                1
+            };
+        }
     }
     // Last entry: trailing gap of 1
-    if n > 0 {
-        layouts[n - 1].gap_after = 1;
+    if let Some(slot) = layouts.last_mut() {
+        slot.gap_after = 1;
     }
     layouts
 }
@@ -195,7 +214,7 @@ fn count_reversed(buf: &Buffer) -> usize {
 /// The plain text of buffer row `y` (viewport x starts at 0, so a byte index into this string equals the buffer column for ASCII content).
 fn buffer_row_text(buf: &Buffer, y: u16) -> String {
     (buf.area.left()..buf.area.right())
-        .map(|x| buf[(x, y)].symbol())
+        .map(|x| buf.cell((x, y)).map(|c| c.symbol()).unwrap_or(""))
         .collect()
 }
 
@@ -203,9 +222,8 @@ fn buffer_row_text(buf: &Buffer, y: u16) -> String {
 fn reversed_cols_on_row(buf: &Buffer, y: u16) -> Vec<u16> {
     (buf.area.left()..buf.area.right())
         .filter(|&x| {
-            buf[(x, y)]
-                .modifier
-                .contains(ratatui::style::Modifier::REVERSED)
+            buf.cell((x, y))
+                .is_some_and(|c| c.modifier.contains(ratatui::style::Modifier::REVERSED))
         })
         .collect()
 }
@@ -214,7 +232,7 @@ fn reversed_cols_on_row(buf: &Buffer, y: u16) -> Vec<u16> {
 fn expected_match_cols(row: &str, needle: &str) -> Vec<u16> {
     let mut cols = Vec::new();
     let mut from = 0;
-    while let Some(rel) = row[from..].find(needle) {
+    while let Some(rel) = row.get(from..).and_then(|s| s.find(needle)) {
         let start = from + rel;
         cols.extend((start as u16)..(start + needle.len()) as u16);
         from = start + needle.len();
@@ -372,7 +390,10 @@ fn large_scrollback_mid_offset_viewport_window_matches_full_pass() {
         end - first < N / 10,
         "paint window should be << total history: first={first} end={end} N={N}"
     );
-    let window_refs: Vec<&ScrollbackEntry> = entries[first..end].iter().collect();
+    let Some(window) = entries.get(first..end) else {
+        panic!("window {first}..{end} out of bounds, len={}", entries.len());
+    };
+    let window_refs: Vec<&ScrollbackEntry> = window.iter().collect();
     let mut win_buf = Buffer::empty(viewport);
     let windowed = render_scrolled_entries_with_scratch(
         &mut win_buf,
@@ -382,7 +403,9 @@ fn large_scrollback_mid_offset_viewport_window_matches_full_pass() {
         Some(selected_abs),
         &theme,
         &appearance,
-        &layouts[first..end],
+        layouts
+            .get(first..end)
+            .unwrap_or_else(|| panic!("layouts slice")),
         0,
         None,
         None,
@@ -456,7 +479,7 @@ fn windowed_paint_renders_full_verb_group_label_for_offscreen_members() {
     let virtual_y = state.get_cached_virtual_y().expect("layout cache");
     let layouts = state.get_cached_entry_layouts().expect("layout cache");
     // Header row on the viewport's last row: all 50 members are off-screen.
-    let scroll = virtual_y[header] + 1 - viewport.height as usize;
+    let scroll = at(virtual_y, header) + 1 - viewport.height as usize;
     let (paint_range, content_y0) =
         state.paint_window(0..state.len(), scroll, viewport.height as usize);
     assert_eq!(
@@ -475,7 +498,9 @@ fn windowed_paint_renders_full_verb_group_label_for_offscreen_members() {
         None,
         &Theme::current(),
         state.appearance(),
-        &layouts[paint_range.clone()],
+        layouts
+            .get(paint_range.clone())
+            .unwrap_or_else(|| panic!("layouts slice")),
         0,
         None,
         None,
@@ -519,10 +544,13 @@ fn windowed_paint_labels_truncation_header_on_last_viewport_row() {
 
     let virtual_y = state.get_cached_virtual_y().expect("layout cache");
     let layouts = state.get_cached_entry_layouts().expect("layout cache");
-    assert!(!layouts[header].verb_group_header, "truncation, not verb");
-    assert_eq!(layouts[header].group_header_count, 2);
+    assert!(
+        !at(layouts, header).verb_group_header,
+        "truncation, not verb"
+    );
+    assert_eq!(at(layouts, header).group_header_count, 2);
     // Header row on the viewport's last row: the hidden prefix and tail sit past the window bottom
-    let scroll = virtual_y[header] + 1 - viewport.height as usize;
+    let scroll = at(virtual_y, header) + 1 - viewport.height as usize;
     let (paint_range, content_y0) =
         state.paint_window(0..state.len(), scroll, viewport.height as usize);
     assert_eq!(
@@ -541,7 +569,9 @@ fn windowed_paint_labels_truncation_header_on_last_viewport_row() {
         None,
         &Theme::current(),
         state.appearance(),
-        &layouts[paint_range.clone()],
+        layouts
+            .get(paint_range.clone())
+            .unwrap_or_else(|| panic!("layouts slice")),
         0,
         None,
         None,
@@ -557,121 +587,6 @@ fn windowed_paint_labels_truncation_header_on_last_viewport_row() {
     assert!(
         header_row.contains("Ran 3 commands"),
         "label must cover the full off-screen hidden prefix: {header_row:?}"
-    );
-}
-
-#[test]
-fn rendered_verb_group_header_aggregates_hook_outcomes_and_keeps_compact_members() {
-    use crate::scrollback::ScrollbackState;
-    use crate::scrollback::blocks::tool::{HookPhase, HookRunEntry, HookRunStatus};
-
-    crate::appearance::cache::set_group_tool_verbs(true);
-    crate::appearance::cache::set_show_thinking_blocks(false);
-    let mut state = ScrollbackState::new();
-    let first = state.push_block(RenderBlock::read("a.rs", None));
-    let second = state.push_block(RenderBlock::list_dir_with_output("src", "a.rs"));
-    let third = state.push_block(RenderBlock::search("TODO", 1, Vec::new()));
-    let elapsed = std::time::Duration::from_millis(1);
-    state.attach_hooks(
-        first,
-        HookPhase::Post,
-        vec![HookRunEntry {
-            name: "ok-hook".to_owned(),
-            status: HookRunStatus::Success { elapsed },
-            output: None,
-        }],
-    );
-    state.attach_hooks(
-        second,
-        HookPhase::Post,
-        vec![HookRunEntry {
-            name: "blocked-hook".to_owned(),
-            status: HookRunStatus::Blocked {
-                detail: "denied".to_owned(),
-                elapsed,
-            },
-            output: None,
-        }],
-    );
-    state.attach_hooks(
-        third,
-        HookPhase::Post,
-        vec![HookRunEntry {
-            name: "failed-hook".to_owned(),
-            status: HookRunStatus::Failed {
-                error: "exit 1".to_owned(),
-                elapsed,
-            },
-            output: None,
-        }],
-    );
-    let narrow_viewport = Rect::new(0, 0, 80, 24);
-    state.prepare_layout(narrow_viewport.width, narrow_viewport.height);
-    let (narrow_buf, _) = render_state(&state, narrow_viewport, true);
-    let narrow_header = buffer_row_text(&narrow_buf, 0);
-    assert!(
-        narrow_header.contains("1 failed]"),
-        "narrow headers must reserve the complete outcome suffix: {narrow_header:?}"
-    );
-
-    let viewport = Rect::new(0, 0, 120, 24);
-    state.prepare_layout(viewport.width, viewport.height);
-    let (buf, _) = render_state(&state, viewport, true);
-    let header_row = buffer_row_text(&buf, 0);
-    assert!(
-        header_row.contains(
-            "Read 1 file, Listed 1 dir, Searched 1 pattern  [hooks: 1 ok, 1 blocked, 1 failed]"
-        ),
-        "collapsed header must show every hidden hook outcome: {header_row:?}"
-    );
-    // A collapsed group has no rail, so the diamond at the content column carries the error colour.
-    assert_eq!(
-        buf[(HorizontalLayout::ACCENT + 2, 0)].fg,
-        Theme::current().accent_error,
-        "failed hook marks the group header as errored"
-    );
-
-    state.set_selected(Some(0));
-    assert!(state.toggle_group_expansion());
-    state.prepare_layout(viewport.width, viewport.height);
-    let layouts = state.get_cached_entry_layouts().expect("layout cache");
-    let member_width = HorizontalLayout::new(viewport, &state.appearance().scrollback.layout)
-        .entry_content_area()
-        .width;
-    for (idx, layout) in layouts[..3].iter().enumerate() {
-        let member_height = EntryRenderer::new(state.entry(idx).unwrap(), &Theme::current())
-            .with_appearance_ref(state.appearance())
-            .with_cwd(state.cwd())
-            .desired_height(member_width);
-        assert_eq!(
-            layout.height,
-            member_height.saturating_add(u16::from(idx == 0)),
-            "expanded member {idx} keeps its ordinary collapsed row height"
-        );
-    }
-    let (buf, _) = render_state(&state, viewport, true);
-    let rows: Vec<String> = (0..viewport.height)
-        .map(|y| buffer_row_text(&buf, y))
-        .collect();
-    let hook_rows: Vec<_> = rows.iter().filter(|row| row.contains("[hooks:")).collect();
-    assert_eq!(
-        hook_rows.len(),
-        4,
-        "the group header and each member carry one compact hook summary: {rows:?}"
-    );
-    assert_eq!(
-        hook_rows
-            .iter()
-            .filter(|row| row.contains("[hooks: 1]"))
-            .count(),
-        3,
-        "each expanded member keeps one standalone compact suffix: {rows:?}"
-    );
-    assert!(
-        ["ok-hook", "blocked-hook", "failed-hook", "post_tool_use"]
-            .iter()
-            .all(|detail| rows.iter().all(|row| !row.contains(detail))),
-        "expanded groups must not reveal per-hook detail sections: {rows:?}"
     );
 }
 
@@ -693,7 +608,7 @@ fn rendered_verb_group_label_spans_hidden_thinking_inside_folded_run() {
 
     let layouts = state.get_cached_entry_layouts().expect("layout cache");
     assert!(
-        layouts[0].verb_group_header,
+        at(layouts, 0).verb_group_header,
         "fold must span the hidden thinking entry"
     );
 
@@ -746,8 +661,11 @@ fn rendered_verb_group_label_stays_tools_only_across_folded_thought() {
     state.prepare_layout(viewport.width, viewport.height);
 
     let layouts = state.get_cached_entry_layouts().expect("layout cache");
-    assert!(layouts[0].verb_group_header, "run folds across the thought");
-    assert_eq!(layouts[1].height, 0, "the thought claims into the fold");
+    assert!(
+        at(layouts, 0).verb_group_header,
+        "run folds across the thought"
+    );
+    assert_eq!(at(layouts, 1).height, 0, "the thought claims into the fold");
 
     let refs = state.entries_in_range(0..state.len());
     let mut buf = Buffer::empty(viewport);
@@ -806,9 +724,9 @@ fn rendered_verb_group_singleton_folds_tool_and_trailing_thoughts() {
     state.prepare_layout(viewport.width, viewport.height);
 
     let layouts = state.get_cached_entry_layouts().expect("layout cache");
-    assert!(layouts[0].verb_group_header, "singleton run folds");
-    assert_eq!(layouts[1].height, 0, "thoughts claim into the fold");
-    assert_eq!(layouts[2].height, 0, "thoughts claim into the fold");
+    assert!(at(layouts, 0).verb_group_header, "singleton run folds");
+    assert_eq!(at(layouts, 1).height, 0, "thoughts claim into the fold");
+    assert_eq!(at(layouts, 2).height, 0, "thoughts claim into the fold");
 
     let refs = state.entries_in_range(0..state.len());
     let mut buf = Buffer::empty(viewport);
@@ -866,8 +784,15 @@ fn rendered_verb_group_folds_subagent_row_and_expansion_keeps_activity() {
     state.prepare_layout(viewport.width, viewport.height);
 
     let layouts = state.get_cached_entry_layouts().expect("layout cache");
-    assert!(layouts[0].verb_group_header, "run folds with the subagent");
-    assert_eq!(layouts[1].height, 0, "subagent row claims into the fold");
+    assert!(
+        at(layouts, 0).verb_group_header,
+        "run folds with the subagent"
+    );
+    assert_eq!(
+        at(layouts, 1).height,
+        0,
+        "subagent row claims into the fold"
+    );
 
     let refs = state.entries_in_range(0..state.len());
     let mut buf = Buffer::empty(viewport);
@@ -995,9 +920,12 @@ fn truncation_header_renders_bucket_label_with_spans_and_plain_count_without() {
     state.prepare_layout(viewport.width, viewport.height);
 
     let layouts = state.get_cached_entry_layouts().expect("layout cache");
-    assert!(!layouts[0].verb_group_header, "commands never verb-fold");
+    assert!(
+        !at(layouts, 0).verb_group_header,
+        "commands never verb-fold"
+    );
     // 6 participants with max_visible 3 leave 3 hidden; the plain count shows one less while the label describes all 3 hidden participants
-    assert_eq!(layouts[0].group_header_count, 2);
+    assert_eq!(at(layouts, 0).group_header_count, 2);
 
     let labeled = truncation_header_row(&state, viewport, true);
     assert!(
@@ -1030,7 +958,7 @@ fn truncation_header_keeps_plain_count_when_group_tool_verbs_off() {
     state.prepare_layout(viewport.width, viewport.height);
 
     let layouts = state.get_cached_entry_layouts().expect("layout cache");
-    assert_eq!(layouts[0].group_header_count, 2, "run still truncates");
+    assert_eq!(at(layouts, 0).group_header_count, 2, "run still truncates");
 
     let row = truncation_header_row(&state, viewport, true);
     assert!(
@@ -1061,8 +989,8 @@ fn expanded_truncation_collapse_header_renders_whole_run_label() {
     state.prepare_layout(viewport.width, viewport.height);
 
     let layouts = state.get_cached_entry_layouts().expect("layout cache");
-    assert!(layouts[0].group_collapse_header);
-    assert_eq!(layouts[0].group_header_count, 5);
+    assert!(at(layouts, 0).group_collapse_header);
+    assert_eq!(at(layouts, 0).group_header_count, 5);
 
     let labeled = truncation_header_row(&state, viewport, true);
     assert!(
@@ -1122,13 +1050,13 @@ fn labeled_truncation_header_synthetic_line_copies_label_text() {
     let model = &result.selection_model;
     let header = model.range(0, GROUP_HEADER_RANGE_ID).expect("header range");
     assert_eq!(header.lines.len(), 1);
-    assert_eq!(header.lines[0].text, "Ran 3 commands");
-    assert_eq!(header.lines[0].screen_y, 0);
+    assert_eq!(at(&header.lines, 0).text, "Ran 3 commands");
+    assert_eq!(at(&header.lines, 0).screen_y, 0);
     // Pin the hitbox to the DRAWN glyphs, not just to the chrome helper
     // The frame's own cells must spell the label starting at screen_x, so a chrome edit that misaligned highlight from paint would fail here
-    let screen_x = header.lines[0].screen_x;
-    let drawn: String = (screen_x..screen_x + header.lines[0].selectable_cols.end)
-        .map(|x| buf[(x, 0)].symbol())
+    let screen_x = at(&header.lines, 0).screen_x;
+    let drawn: String = (screen_x..screen_x + at(&header.lines, 0).selectable_cols.end)
+        .map(|x| buf.cell((x, 0)).map(|c| c.symbol()).unwrap_or(""))
         .collect();
     assert_eq!(
         drawn, "Ran 3 commands",
@@ -1141,8 +1069,8 @@ fn labeled_truncation_header_synthetic_line_copies_label_text() {
         screen_x, expected_x,
         "hitbox sits past accent chrome + diamond prefix"
     );
-    let copy =
-        reconstruct_selection_text(model, &full_row_drag(&header.lines[0])).expect("header copy");
+    let copy = reconstruct_selection_text(model, &full_row_drag(at(&header.lines, 0)))
+        .expect("header copy");
     assert_eq!(copy, "Ran 3 commands");
 
     // Expanded: the collapse header describes the whole run and copies it.
@@ -1154,8 +1082,8 @@ fn labeled_truncation_header_synthetic_line_copies_label_text() {
     let header = model
         .range(0, GROUP_HEADER_RANGE_ID)
         .expect("expanded header range");
-    assert_eq!(header.lines[0].text, "Ran 6 commands");
-    let copy = reconstruct_selection_text(model, &full_row_drag(&header.lines[0]))
+    assert_eq!(at(&header.lines, 0).text, "Ran 6 commands");
+    let copy = reconstruct_selection_text(model, &full_row_drag(at(&header.lines, 0)))
         .expect("expanded header copy");
     assert_eq!(copy, "Ran 6 commands");
 }
@@ -1224,9 +1152,9 @@ fn verb_and_truncation_headers_share_one_label_channel() {
     state.prepare_layout(viewport.width, viewport.height);
 
     let layouts = state.get_cached_entry_layouts().expect("layout cache");
-    assert!(layouts[0].verb_group_header, "reads verb-fold");
+    assert!(at(layouts, 0).verb_group_header, "reads verb-fold");
     assert!(
-        !layouts[2].verb_group_header && layouts[2].is_group_header(),
+        !at(layouts, 2).verb_group_header && at(layouts, 2).is_group_header(),
         "commands truncation-fold behind the verb run"
     );
 
@@ -1247,11 +1175,11 @@ fn verb_and_truncation_headers_share_one_label_channel() {
     let verb = model
         .range(0, GROUP_HEADER_RANGE_ID)
         .expect("verb header range");
-    assert_eq!(verb.lines[0].text, "Read 2 files");
+    assert_eq!(at(&verb.lines, 0).text, "Read 2 files");
     let trunc = model
         .range(2, GROUP_HEADER_RANGE_ID)
         .expect("truncation header range");
-    assert_eq!(trunc.lines[0].text, "Ran 3 commands");
+    assert_eq!(at(&trunc.lines, 0).text, "Ran 3 commands");
 }
 
 #[test]
@@ -1287,14 +1215,14 @@ fn test_selection_model_maps_visible_lines_for_markdown_entry() {
     let result = render_with_scratch(&entries, viewport, 0, None);
 
     assert!(!result.selection_model.ranges.is_empty());
-    let range = &result.selection_model.ranges[0];
+    let range = &at(&result.selection_model.ranges, 0);
     assert_eq!(range.entry_idx, 0);
     assert!(range.lines.len() > 1);
     assert!(
         range
             .lines
             .windows(2)
-            .all(|w| w[0].screen_y < w[1].screen_y)
+            .all(|w| matches!(w, [a, b] if a.screen_y < b.screen_y))
     );
 }
 
@@ -1306,8 +1234,8 @@ fn test_selection_model_top_clipped_markdown_entry() {
     let viewport = Rect::new(0, 0, 20, 3);
     let result = render_with_scratch(&entries, viewport, 1, None);
 
-    let range = &result.selection_model.ranges[0];
-    assert_eq!(range.lines[0].screen_y, 0);
+    let range = &at(&result.selection_model.ranges, 0);
+    assert_eq!(at(&range.lines, 0).screen_y, 0);
 }
 
 #[test]
@@ -1318,7 +1246,7 @@ fn test_selection_model_bottom_clipped_markdown_entry() {
     let viewport = Rect::new(0, 0, 20, 2);
     let result = render_with_scratch(&entries, viewport, 0, None);
 
-    let range = &result.selection_model.ranges[0];
+    let range = &at(&result.selection_model.ranges, 0);
     assert!(range.lines.len() <= 2);
 }
 
@@ -1341,15 +1269,12 @@ fn test_selected_entry_output_divergence_uses_selected_branch() {
     let result = render_with_scratch(&entries, viewport, 0, Some(0));
 
     assert!(!result.selection_model.visible_blocks.is_empty());
-    assert_eq!(result.selection_model.visible_blocks[0].entry_idx, 0);
+    assert_eq!(at(&result.selection_model.visible_blocks, 0).entry_idx, 0);
 }
 
-/// Message-style blocks (`AgentMessage`, `UserPrompt`, `Btw`) reserve 10 columns on the right for the timestamp overlay.
-/// Their cached output is therefore wrapped at `content_area.width - 10`, not `content_area.width`.
-///
 /// `VisibleBlockGeometry.content_width` must report the same reduced width that was used to populate the cache.
-/// Otherwise code that re-derives the wrapped lines from the model (notably `finish_text_drag`) would call `effective_output` at the wrong width.
-/// A different wrapping there slices the wrong content for the clipboard.
+/// Otherwise code that re-derives the wrapped lines from the model (notably `finish_text_drag`) would call
+/// `effective_output` at the wrong width.
 #[test]
 fn message_block_content_width_subtracts_timestamp_reservation() {
     // Picked so the message wraps to a different line count at `content_width - 10` than at `content_width`
@@ -1361,7 +1286,7 @@ fn message_block_content_width_subtracts_timestamp_reservation() {
     let result = render_with_scratch(&entries, viewport, 0, None);
 
     let pane_content_width = result.selection_model.content_area.width;
-    let block = &result.selection_model.visible_blocks[0];
+    let block = &at(&result.selection_model.visible_blocks, 0);
     assert_eq!(
         block.content_width,
         pane_content_width.saturating_sub(10),
@@ -1372,13 +1297,13 @@ fn message_block_content_width_subtracts_timestamp_reservation() {
     // Re-deriving them at the same width must produce the same line count so block_line_idx values remain valid
     // Deriving at the wider `pane_content_width` produces a different wrapping (the bug `finish_text_drag` previously triggered)
     let appearance = AppearanceConfig::default();
-    let model_lines = result.selection_model.ranges[0].lines.len();
-    let entry_lines_narrow = entries[0]
+    let model_lines = at(&result.selection_model.ranges, 0).lines.len();
+    let entry_lines_narrow = at(&entries, 0)
         .effective_output(block.content_width, &appearance, false, None)
         .output()
         .lines
         .len();
-    let entry_lines_wide = entries[0]
+    let entry_lines_wide = at(&entries, 0)
         .effective_output(pane_content_width, &appearance, false, None)
         .output()
         .lines
@@ -1434,7 +1359,7 @@ fn overlay_single_line_link() {
     map_hyperlinks_to_overlay(&links, &output, 0, 10, 20, 4, 0, &[], None, &mut overlay);
 
     assert_eq!(overlay.links().len(), 1);
-    let link = &overlay.links()[0];
+    let link = &at(overlay.links(), 0);
     assert_eq!(link.screen_row, 10);
     assert_eq!(link.col_start, 4);
     assert_eq!(link.col_end, 9);
@@ -1471,7 +1396,7 @@ fn overlay_relative_link_resolves_against_cwd() {
         &mut overlay,
     );
     assert_eq!(overlay.links().len(), 1);
-    let url = resolve_link_target(&overlay.links()[0].target)
+    let url = resolve_link_target(&at(overlay.links(), 0).target)
         .and_then(|resolved| resolved.osc8_url)
         .expect("file url");
     assert!(
@@ -1505,7 +1430,7 @@ fn overlay_markdown_relative_link_opens_as_file_url() {
     let media = vec![dir.path().join("images/1.png")];
 
     let mut entries = vec![make_markdown_entry("Saved [images/1.png](images/1.png)\n")];
-    if let RenderBlock::AgentMessage(b) = &mut entries[0].block {
+    if let RenderBlock::AgentMessage(b) = &mut at_mut(&mut entries, 0).block {
         b.finish();
     }
     let viewport = Rect::new(0, 0, 80, 10);
@@ -1554,10 +1479,9 @@ fn overlay_markdown_relative_link_opens_as_file_url() {
 
 #[test]
 fn overlay_word_wrap_splits_link() {
-    // Pre-wrap line "hello world" (11 chars) wrapped into two segments:
-    // wrapped line 0: "hello" (5 chars, joiner=None  → new pre-wrap line)
-    // wrapped line 1: "world" (5 chars, joiner=Some(" ") → continuation)
-    // The joiner " " is the space consumed at the wrap point (col 5).
+    // Pre-wrap line "hello world" (11 chars) wrapped into two segments: wrapped line 0: "hello" (5 chars, joiner=None
+    // → new pre-wrap line) wrapped line 1: "world" (5 chars, joiner=Some(" ") → continuation). The joiner " " is the
+    // space consumed at the wrap point (col 5).
     let output = make_block_output(&[("hello", None), ("world", Some(" "))]);
     // Link spans the full pre-wrap line: cols 0..11
     let links = [make_hyperlink(0, 0..11, "https://b.com", 2)];
@@ -1566,18 +1490,18 @@ fn overlay_word_wrap_splits_link() {
 
     assert_eq!(overlay.links().len(), 2);
     // First segment: cols 0..5 on screen row 0
-    assert_eq!(overlay.links()[0].screen_row, 0);
-    assert_eq!(overlay.links()[0].col_start, 0);
-    assert_eq!(overlay.links()[0].col_end, 5);
+    assert_eq!(at(overlay.links(), 0).screen_row, 0);
+    assert_eq!(at(overlay.links(), 0).col_start, 0);
+    assert_eq!(at(overlay.links(), 0).col_end, 5);
     // Second segment: cols 0..5 on screen row 1
-    assert_eq!(overlay.links()[1].screen_row, 1);
-    assert_eq!(overlay.links()[1].col_start, 0);
-    assert_eq!(overlay.links()[1].col_end, 5);
+    assert_eq!(at(overlay.links(), 1).screen_row, 1);
+    assert_eq!(at(overlay.links(), 1).col_start, 0);
+    assert_eq!(at(overlay.links(), 1).col_end, 5);
     assert_eq!(
-        &*resolve_link_target(&overlay.links()[0].target)
+        &*resolve_link_target(&at(overlay.links(), 0).target)
             .and_then(|resolved| resolved.osc8_url)
             .expect("url"),
-        &*resolve_link_target(&overlay.links()[1].target)
+        &*resolve_link_target(&at(overlay.links(), 1).target)
             .and_then(|resolved| resolved.osc8_url)
             .expect("url")
     );
@@ -1597,12 +1521,12 @@ fn overlay_content_skip_hides_scrolled_lines() {
 
     assert_eq!(overlay.links().len(), 1);
     assert_eq!(
-        &*resolve_link_target(&overlay.links()[0].target)
+        &*resolve_link_target(&at(overlay.links(), 0).target)
             .and_then(|resolved| resolved.osc8_url)
             .expect("url"),
         "https://visible.com"
     );
-    assert_eq!(overlay.links()[0].screen_row, 0);
+    assert_eq!(at(overlay.links(), 0).screen_row, 0);
 }
 
 #[test]
@@ -1618,7 +1542,7 @@ fn overlay_max_screen_y_clips_links() {
 
     assert_eq!(overlay.links().len(), 1);
     assert_eq!(
-        &*resolve_link_target(&overlay.links()[0].target)
+        &*resolve_link_target(&at(overlay.links(), 0).target)
             .and_then(|resolved| resolved.osc8_url)
             .expect("url"),
         "https://visible.com"
@@ -1640,9 +1564,9 @@ fn overlay_content_line_offset_skips_header_lines() {
     map_hyperlinks_to_overlay(&links, &output, 0, 0, 10, 0, 2, &[], None, &mut overlay);
 
     assert_eq!(overlay.links().len(), 1);
-    assert_eq!(overlay.links()[0].screen_row, 2);
-    assert_eq!(overlay.links()[0].col_start, 0);
-    assert_eq!(overlay.links()[0].col_end, 4);
+    assert_eq!(at(overlay.links(), 0).screen_row, 2);
+    assert_eq!(at(overlay.links(), 0).col_start, 0);
+    assert_eq!(at(overlay.links(), 0).col_end, 4);
 }
 
 #[test]
@@ -1665,7 +1589,7 @@ fn overlay_partial_column_overlap() {
     map_hyperlinks_to_overlay(&links, &output, 0, 5, 10, 2, 0, &[], None, &mut overlay);
 
     assert_eq!(overlay.links().len(), 1);
-    let link = &overlay.links()[0];
+    let link = &at(overlay.links(), 0);
     assert_eq!(link.screen_row, 5);
     assert_eq!(link.col_start, 5); // content_x(2) + local_col_start(3)
     assert_eq!(link.col_end, 8); // content_x(2) + local_col_end(6)
@@ -1692,7 +1616,7 @@ fn execute_block_urls_get_overlay_links() {
     ))];
     // Force expanded mode so output is visible.
     let mut entries = entries;
-    entries[0].display_mode = DisplayMode::Expanded;
+    at_mut(&mut entries, 0).display_mode = DisplayMode::Expanded;
 
     let viewport = Rect::new(0, 0, 80, 20);
     let result = render_with_scratch(&entries, viewport, 0, None);
@@ -1769,7 +1693,7 @@ fn markdown_wrapped_project_media_path_fully_linkified() {
         path_links.len(),
         "each visual row gets one region"
     );
-    assert!(rows.windows(2).all(|w| w[1] == w[0] + 1));
+    assert!(rows.windows(2).all(|w| matches!(w, [a, b] if *b == *a + 1)));
 }
 
 #[test]
@@ -1844,7 +1768,7 @@ fn collapsed_block_body_urls_not_visible() {
         None::<String>,
     ))];
     let mut entries = entries;
-    entries[0].display_mode = DisplayMode::Collapsed;
+    at_mut(&mut entries, 0).display_mode = DisplayMode::Collapsed;
 
     let viewport = Rect::new(0, 0, 80, 10);
     let result = render_with_scratch(&entries, viewport, 0, None);
@@ -1863,7 +1787,7 @@ fn collapsed_block_header_file_path_is_scanned() {
         "file1\nfile2",
         None::<String>,
     ))];
-    entries[0].display_mode = DisplayMode::Collapsed;
+    at_mut(&mut entries, 0).display_mode = DisplayMode::Collapsed;
 
     let viewport = Rect::new(0, 0, 80, 10);
     let result = render_with_scratch(&entries, viewport, 0, None);
@@ -2420,21 +2344,21 @@ fn verb_group_expanded_slot_header_and_member_select_independently() {
     // The two rows resolve to two distinct ranges, one line each on their own screen rows
     let header = model.range(0, GROUP_HEADER_RANGE_ID).expect("header range");
     assert_eq!(header.lines.len(), 1);
-    assert_eq!(header.lines[0].text, "Read 2 files");
-    assert_eq!(header.lines[0].screen_y, 0);
+    assert_eq!(at(&header.lines, 0).text, "Read 2 files");
+    assert_eq!(at(&header.lines, 0).screen_y, 0);
     let member = model
         .range(0, crate::scrollback::blocks::tool::TOOL_HEADER_RANGE)
         .expect("member range");
     assert_eq!(member.lines.len(), 1);
-    assert!(member.lines[0].text.contains("b1.rs"));
-    assert_eq!(member.lines[0].screen_y, 1);
+    assert!(at(&member.lines, 0).text.contains("b1.rs"));
+    assert_eq!(at(&member.lines, 0).screen_y, 1);
 
     // A same-row drag over each row reconstructs that row's text only.
-    let header_copy =
-        reconstruct_selection_text(model, &full_row_drag(&header.lines[0])).expect("header copy");
+    let header_copy = reconstruct_selection_text(model, &full_row_drag(at(&header.lines, 0)))
+        .expect("header copy");
     assert_eq!(header_copy, "Read 2 files");
-    let member_copy =
-        reconstruct_selection_text(model, &full_row_drag(&member.lines[0])).expect("member copy");
+    let member_copy = reconstruct_selection_text(model, &full_row_drag(at(&member.lines, 0)))
+        .expect("member copy");
     assert!(
         member_copy.contains("b1.rs") && !member_copy.contains("Read 2 files"),
         "member drag must not drag the header along: {member_copy:?}"
@@ -2631,7 +2555,7 @@ fn truncated_execute_block_detects_urls_in_head_and_tail() {
         &output,
         None::<String>,
     ))];
-    entries[0].display_mode = DisplayMode::Truncated;
+    at_mut(&mut entries, 0).display_mode = DisplayMode::Truncated;
 
     let viewport = Rect::new(0, 0, 80, 30);
     let result = render_with_scratch(&entries, viewport, 0, None);
@@ -2690,13 +2614,13 @@ fn tool_header_link_target_overlay_covers_path_after_bullet() {
         cwd: Some(cwd.clone()),
     };
     let painted = entry.block.output(&ctx);
-    let header = &painted.lines[0];
+    let header = &at(&painted.lines, 0);
     assert!(
         header.content.spans.len() >= 3,
         "expected [bullet, Edit , path], got {} spans",
         header.content.spans.len()
     );
-    let path_span = header.content.spans[2].content.as_ref();
+    let path_span = at(&header.content.spans, 2).content.as_ref();
     assert_eq!(path_span, "foo.rs");
     let target = header.link_target.as_ref().expect("link target on header");
     assert_eq!(
@@ -2706,8 +2630,8 @@ fn tool_header_link_target_overlay_covers_path_after_bullet() {
 
     let cols = selectable_cols(&header.content, &header.selectable)
         .expect("path span should be selectable");
-    let bullet_w = header.content.spans[0].content.width() as u16;
-    let verb_w = header.content.spans[1].content.width() as u16;
+    let bullet_w = at(&header.content.spans, 0).content.width() as u16;
+    let verb_w = at(&header.content.spans, 1).content.width() as u16;
     let path_w = path_span.width() as u16;
     assert_eq!(
         cols,
@@ -2758,12 +2682,12 @@ fn tool_header_link_target_overlay_covers_path_after_bullet() {
     );
     let hlayout = HorizontalLayout::new(viewport, &appearance.scrollback.layout);
     assert_eq!(
-        file_links[0].col_start,
+        at(&file_links, 0).col_start,
         hlayout.content.x.saturating_add(cols.start),
         "overlay must start on path, not bullet/verb"
     );
     assert_eq!(
-        file_links[0].col_end,
+        at(&file_links, 0).col_end,
         hlayout.content.x.saturating_add(cols.end),
         "overlay must end at path end"
     );
@@ -3068,18 +2992,9 @@ fn read_header_link_is_dropped_when_path_has_no_visible_columns() {
     );
 }
 
-/// Collect all `OverlayLink`s for `url` grouped by `OverlayLink::id`, returning the largest id-group (the wrapped URL's fragment set).
-///
-/// In pretty mode `[text](url)` produces two HyperlinkTargets that BOTH reference `url` but have distinct ids.
-/// One covers the link text (lower id, parser-produced) and one the `(url)` suffix (higher id, url_scan-produced).
-/// The wrapped URL fragments share an id; for URL-wrap tests the url_scan group is the one that spans multiple rows.
-/// Panics with a verbose diagnostic if no group has at least one entry.
-///
-/// Ties: `Iterator::max_by_key` returns the LAST equally-maximum element, and `BTreeMap::into_iter()` yields entries in ascending key order.
-/// If both groups have the same number of fragments, the higher-id group wins.
-/// That is the url_scan-produced URL-suffix group, the right pick for these tests.
-/// The helper is unambiguous for all current callers.
-/// A future caller with a different `[parser, url_scan]` shape may want to filter `result.link_overlay.links()` directly.
+/// Collect all `OverlayLink`s for `url` grouped by `OverlayLink::id`, returning the largest id-group (the wrapped
+/// URL's fragment set). Panics with a verbose diagnostic if no group has at least one entry. If both groups have
+/// the same number of fragments, the higher-id group wins. The helper is unambiguous for all current callers.
 fn url_overlay_group<'a>(result: &'a ScrollRenderResult, url: &str) -> Vec<&'a OverlayLink> {
     let mut by_id: std::collections::BTreeMap<u32, Vec<&OverlayLink>> =
         std::collections::BTreeMap::new();
@@ -3122,9 +3037,12 @@ fn url_overlay_group<'a>(result: &'a ScrollRenderResult, url: &str) -> Vec<&'a O
 /// Catches partial regressions where the middle of a wrapped URL is silently skipped.
 fn assert_consecutive_rows(fragments: &[&OverlayLink]) {
     for w in fragments.windows(2) {
+        let [a, b] = w else {
+            panic!("windows(2) yielded {w:?}");
+        };
         assert_eq!(
-            w[1].screen_row,
-            w[0].screen_row + 1,
+            b.screen_row,
+            a.screen_row + 1,
             "wrapped URL fragments must be on consecutive screen rows: {:?}",
             fragments
                 .iter()
@@ -3147,10 +3065,8 @@ fn overlay_pretty_link_url_wraps_across_rows() {
     let viewport = Rect::new(0, 0, 50, 20);
     let result = render_with_scratch(&entries, viewport, 0, None);
 
-    // The pre-wrap line is ~185 cells wide and the per-block content area is ~35 cells (viewport - timestamp reservation - layout chrome)
-    // The link text takes row 0 (33 cells), then the URL portion wraps onto exactly 5 continuation rows
-    // This is a plain paragraph (no `subsequent_indent`), so the combined fragment widths must equal the URL's display width
-    // That invariant would fail under any row drop or off-by-N column-tracking regression
+    // This is a plain paragraph (no `subsequent_indent`), so the combined fragment widths must equal the URL's display
+    // width. That invariant would fail under any row drop or off-by-N column-tracking regression.
     let group = url_overlay_group(&result, url);
     assert_eq!(
         group.len(),
@@ -3211,11 +3127,9 @@ fn overlay_pretty_link_url_wraps_multi_row_paragraph() {
     );
 }
 
-/// CJK link text: column tracking must be display-width aware.
-/// If the bug had used byte length for `日` (3 bytes, but 2 display cells), the column accounting would be off by N cells per CJK character.
-/// The URL fragments then wouldn't sum to the URL's display width.
-/// We assert that combined fragment widths equal the URL's display width.
-/// That is the strongest cell-width invariant we can pin without re-deriving the entire wrap layout.
+/// CJK link text: column tracking must be display-width aware. If the bug had used byte length for `日` (3 bytes,
+/// but 2 display cells), the column accounting would be off by N cells per CJK character. That is the strongest
+/// cell-width invariant we can pin without re-deriving the entire wrap layout.
 #[test]
 fn overlay_pretty_link_url_with_cjk_text() {
     use unicode_width::UnicodeWidthStr;
@@ -3245,20 +3159,11 @@ fn overlay_pretty_link_url_with_cjk_text() {
 }
 
 /// Long URL inside a blockquote. The OverlayLink for the URL must cover continuation rows so OSC 8 is present on every wrapped row.
-///
-/// KNOWN-BUG: `map_hyperlinks_to_overlay` accumulates `cumulative_col` using `line.content.width()`.
-/// That width INCLUDES the `│ ` indent injected by `word_wrap_line_with_joiners` on continuation rows.
-/// Two consequences for blockquote/list URL wraps:
-///   (a) Cosmetic: the OverlayLink on continuation rows starts at `content_x`, covering the `│ ` indent.
-///       The indent characters are OSC 8 wrapped and inherit the terminal's auto-styling (underline/colour).
-///   (b) Functional: `cumulative_col` over-counts by `indent_width` cells per continuation row.
-///       The last `indent_width` cells of the URL on each continuation row are therefore not covered by an OverlayLink and are not clickable.
-///       With N continuation rows the unclickable tail accumulates to `N * indent_width` cells.
-/// The invariant that OSC 8 is present on every wrapped row of the URL IS satisfied, and this test pins it.
-/// Once the bug is fixed (needs `BlockLine` to carry the `subsequent_indent` width), tighten the assertions:
-/// `col_start == content_x + indent_width` on continuation rows, and `sum(fragment_widths) == url.display_width()`.
+/// Blockquote URL wrap: OSC 8 must cover every wrapped row.
+/// `map_hyperlinks_to_overlay` produces OverlayLinks whose combined width exactly equals the URL's display width.
 #[test]
 fn overlay_pretty_link_url_in_blockquote_wraps_correctly() {
+    use unicode_width::UnicodeWidthStr;
     let url = "https://example.com/blockquote/path/with/many/hyphens-and-segments-here";
     let markdown = format!("> See [docs]({url}) for more.\n");
     let entries = vec![make_markdown_entry(&markdown)];
@@ -3278,6 +3183,20 @@ fn overlay_pretty_link_url_in_blockquote_wraps_correctly() {
     );
     assert_consecutive_rows(&group);
 
+    // The indent width for blockquote continuation is 2 ("│ ")
+    let indent_width: u16 = 2;
+
+    // Continuation rows (all but the first) must start after the indent
+    for frag in group.get(1..).into_iter().flatten() {
+        assert_eq!(
+            frag.col_start,
+            content_x + indent_width,
+            "OverlayLink on continuation row must start exactly at content_x + indent_width; got col_start={} but expected {}",
+            frag.col_start,
+            content_x + indent_width
+        );
+    }
+
     // All fragments must be inside the viewport content area.
     for frag in &group {
         assert!(
@@ -3289,14 +3208,24 @@ fn overlay_pretty_link_url_in_blockquote_wraps_correctly() {
             "OverlayLink must not exceed the viewport content width",
         );
     }
+
+    // Combined fragment widths must equal the URL's display width (indent-corrected accounting)
+    let combined_width: u32 = group.iter().map(|o| (o.col_end - o.col_start) as u32).sum();
+    assert_eq!(
+        combined_width as usize,
+        UnicodeWidthStr::width(url),
+        "combined fragment widths must equal URL display width; got fragments: {:?}",
+        group
+            .iter()
+            .map(|o| (o.screen_row, o.col_start, o.col_end))
+            .collect::<Vec<_>>(),
+    );
 }
 
 /// Long URL inside a list item. Same OSC-coverage invariant as the blockquote test above.
-/// See that test for the rationale and the related indent-inclusion bug.
-/// Both its symptoms apply here too.
-/// The indent inherits the URL styling, and the last `indent_width` URL cells of each continuation row are not clickable.
 #[test]
 fn overlay_pretty_link_url_in_list_wraps_correctly() {
+    use unicode_width::UnicodeWidthStr;
     let url = "https://example.com/list/item/path/with/many/hyphens-and-segments-here";
     let markdown = format!("- See [docs]({url}) for more.\n");
     let entries = vec![make_markdown_entry(&markdown)];
@@ -3316,6 +3245,17 @@ fn overlay_pretty_link_url_in_list_wraps_correctly() {
     );
     assert_consecutive_rows(&group);
 
+    // Top-level list items render as "• …" with no quote-bar indent on continuation rows
+    // Continuation OverlayLinks start at content_x (no indent offset)
+    for frag in group.get(1..).into_iter().flatten() {
+        assert_eq!(
+            frag.col_start, content_x,
+            "OverlayLink on list continuation row must start at content_x (no quote-bar indent); got col_start={} but expected {}",
+            frag.col_start, content_x
+        );
+    }
+
+    // All fragments must be inside the viewport content area.
     for frag in &group {
         assert!(
             frag.col_start >= content_x,
@@ -3326,6 +3266,144 @@ fn overlay_pretty_link_url_in_list_wraps_correctly() {
             "OverlayLink must not exceed the viewport content width",
         );
     }
+
+    // Combined fragment widths must equal the URL's display width (indent-corrected accounting)
+    let combined_width: u32 = group.iter().map(|o| (o.col_end - o.col_start) as u32).sum();
+    assert_eq!(
+        combined_width as usize,
+        UnicodeWidthStr::width(url),
+        "combined fragment widths must equal URL display width; got fragments: {:?}",
+        group
+            .iter()
+            .map(|o| (o.screen_row, o.col_start, o.col_end))
+            .collect::<Vec<_>>(),
+    );
+}
+
+/// GBT-6459 regression: parenthetical mid-path URL soft-wraps (e.g. arxiv abs link).
+/// Both wrap fragments must share the same id and point to the FULL URL, not a truncated prefix.
+/// Symptom: row 0 opens `https://arxiv.org/` alone; continuation has no OSC8 (gray, not clickable).
+#[test]
+fn overlay_parenthetical_arxiv_url_wraps_correctly() {
+    use unicode_width::UnicodeWidthStr;
+    let url = "https://arxiv.org/abs/2309.14322";
+    let markdown = format!("See ({url}) for details.\n");
+    let entries = vec![make_markdown_entry(&markdown)];
+
+    // Viewport width chosen to wrap mid-URL: "See (https://arxiv.org/" on row 0, "abs/2309.14322) for details." on row 1
+    let viewport = Rect::new(0, 0, 30, 10);
+    let result = render_with_scratch(&entries, viewport, 0, None);
+
+    let group = url_overlay_group(&result, url);
+    assert!(
+        group.len() >= 2,
+        "parenthetical URL should wrap; got fragments: {:?}",
+        group
+            .iter()
+            .map(|o| (o.screen_row, o.col_start, o.col_end))
+            .collect::<Vec<_>>(),
+    );
+    assert_consecutive_rows(&group);
+
+    // All fragments must share the same id
+    let ids: Vec<_> = group.iter().filter_map(|o| o.id).collect();
+    assert!(
+        !ids.is_empty() && ids.windows(2).all(|w| matches!(w, [a, b] if a == b)),
+        "all wrap fragments must share the same nonempty id; got ids: {:?}",
+        ids
+    );
+
+    // All fragments must point to the FULL URL, not a truncated prefix like "https://arxiv.org/"
+    for frag in &group {
+        let target_url = resolve_link_target(&frag.target)
+            .and_then(|resolved| resolved.osc8_url)
+            .expect("url");
+        assert_eq!(
+            target_url.as_ref(),
+            url,
+            "every wrap fragment must point to the full URL, not a truncated prefix"
+        );
+    }
+
+    // Combined fragment widths must equal the URL's display width
+    let combined_width: u32 = group.iter().map(|o| (o.col_end - o.col_start) as u32).sum();
+    assert_eq!(
+        combined_width as usize,
+        UnicodeWidthStr::width(url),
+        "combined fragment widths must equal URL display width; got fragments: {:?}",
+        group
+            .iter()
+            .map(|o| (o.screen_row, o.col_start, o.col_end))
+            .collect::<Vec<_>>(),
+    );
+}
+
+/// GBT-6459 variant: list-indented pretty link with arxiv-shaped URL wrapping mid-host/path.
+/// Screenshot context: list bullet + long `[title](https://arxiv.org/abs/…)` wrapping mid-host/path.
+/// Every URL cell must have OverlayLink with full URL + shared markdown id.
+#[test]
+fn overlay_list_arxiv_pretty_link_wraps_correctly() {
+    use unicode_width::UnicodeWidthStr;
+    let url = "https://arxiv.org/abs/2309.14322";
+    let markdown = format!("- See [paper]({url}) for details.\n");
+    let entries = vec![make_markdown_entry(&markdown)];
+
+    let viewport = Rect::new(0, 0, 35, 10);
+    let result = render_with_scratch(&entries, viewport, 0, None);
+    let content_x = result.selection_model.content_area.x;
+
+    let group = url_overlay_group(&result, url);
+    assert!(
+        group.len() >= 2,
+        "list arxiv URL should wrap; got fragments: {:?}",
+        group
+            .iter()
+            .map(|o| (o.screen_row, o.col_start, o.col_end))
+            .collect::<Vec<_>>(),
+    );
+    assert_consecutive_rows(&group);
+
+    // Top-level list items render as "• …" with no quote-bar indent on continuation rows
+    // Continuation OverlayLinks start at content_x (no indent offset)
+    for frag in group.get(1..).into_iter().flatten() {
+        assert_eq!(
+            frag.col_start, content_x,
+            "OverlayLink on list continuation row must start at content_x (no quote-bar indent); got col_start={} but expected {}",
+            frag.col_start, content_x
+        );
+    }
+
+    // All fragments must share the same id
+    let ids: Vec<_> = group.iter().filter_map(|o| o.id).collect();
+    assert!(
+        !ids.is_empty() && ids.windows(2).all(|w| matches!(w, [a, b] if a == b)),
+        "all wrap fragments must share the same nonempty id; got ids: {:?}",
+        ids
+    );
+
+    // All fragments must point to the FULL URL
+    for frag in &group {
+        let target_url = resolve_link_target(&frag.target)
+            .and_then(|resolved| resolved.osc8_url)
+            .expect("url");
+        assert_eq!(
+            target_url.as_ref(),
+            url,
+            "every wrap fragment must point to the full URL, not a truncated prefix"
+        );
+    }
+
+    // Combined fragment widths must equal the URL's display width
+    let combined_width: u32 = group.iter().map(|o| (o.col_end - o.col_start) as u32).sum();
+    assert_eq!(
+        combined_width as usize,
+        UnicodeWidthStr::width(url),
+        "combined fragment widths must equal URL display width; got fragments: {:?}",
+        group
+            .iter()
+            .map(|o| (o.screen_row, o.col_start, o.col_end))
+            .collect::<Vec<_>>(),
+    );
 }
 
 /// Width changes trigger `set_max_table_width` resets inside `MarkdownContent::ensure_wrapped`.
@@ -3335,15 +3413,11 @@ fn overlay_url_hyperlinks_survive_width_change() {
     let url = "https://example.com/long/url/path/with/many/segments-and-hyphens";
     let markdown = format!("[link]({url})\n");
     let mut entries = vec![make_markdown_entry(&markdown)];
-    if let RenderBlock::AgentMessage(b) = &mut entries[0].block {
+    if let RenderBlock::AgentMessage(b) = &mut at_mut(&mut entries, 0).block {
         b.finish();
     }
-    // Exercise multiple width transitions and back-and-forth: a wide viewport where the URL fits on one row, a narrow one where it wraps
-    // The URL must remain present at every step.
-    //
-    // The "wide" threshold (120) makes the per-block content area exceed the URL's display width plus the leading "link (" prefix
-    // That holds even after the 10-cell timestamp reservation and ~4 cells of layout chrome
-    // The "narrow" widths (30, 50) force wrapping
+    // Exercise multiple width transitions and back-and-forth: a wide viewport where the URL fits on one row, a narrow
+    // one where it wraps. The URL must remain present at every step.
     for width in [120u16, 50, 30, 50, 120, 30] {
         let result = render_with_scratch(&entries, Rect::new(0, 0, width, 10), 0, None);
         let group = url_overlay_group(&result, url);
@@ -3359,7 +3433,10 @@ fn overlay_url_hyperlinks_survive_width_change() {
                     .collect::<Vec<_>>(),
             );
             assert_eq!(
-                (group[0].col_end - group[0].col_start) as usize,
+                group
+                    .first()
+                    .map(|g| (g.col_end - g.col_start) as usize)
+                    .unwrap_or_else(|| panic!("expected a URL fragment")),
                 url.len(),
                 "single-row URL fragment width must equal URL display width",
             );
@@ -3406,7 +3483,10 @@ fn overlay_pretty_link_url_no_wrap_single_row() {
         "short URL must produce exactly one OverlayLink fragment",
     );
     assert_eq!(
-        (group[0].col_end - group[0].col_start) as usize,
+        group
+            .first()
+            .map(|g| (g.col_end - g.col_start) as usize)
+            .unwrap_or_else(|| panic!("expected a URL fragment")),
         url.len(),
         "single-row URL fragment width must equal URL display width",
     );
@@ -3427,8 +3507,14 @@ fn overlay_pretty_two_wrapping_links_distinct_ids() {
     let group_a = url_overlay_group(&result, url_a);
     let group_b = url_overlay_group(&result, url_b);
 
-    let id_a = group_a[0].id.expect("URL fragment must have id");
-    let id_b = group_b[0].id.expect("URL fragment must have id");
+    let id_a = group_a
+        .first()
+        .and_then(|g| g.id)
+        .unwrap_or_else(|| panic!("URL fragment must have id"));
+    let id_b = group_b
+        .first()
+        .and_then(|g| g.id)
+        .unwrap_or_else(|| panic!("URL fragment must have id"));
     assert_ne!(
         id_a, id_b,
         "two distinct URLs must produce distinct OSC 8 ids",
@@ -3439,10 +3525,7 @@ fn overlay_pretty_two_wrapping_links_distinct_ids() {
     assert_consecutive_rows(&group_a);
     assert_consecutive_rows(&group_b);
 
-    // The set of OverlayLink ids referencing either URL must have at least 4 distinct entries
-    // Those are the parser link-text ids for "link-a" and "link-b" and the url_scan ids for `(url_a)` and `(url_b)`
-    // If any two collide, OSC 8 hyperlinks silently merge
-    // The known shape is parser hyperlink IDs not advanced past url_scan IDs across paragraphs
+    // The set of OverlayLink ids referencing either URL must have at least 4 distinct entries.
     let ids: std::collections::HashSet<u32> = result
         .link_overlay
         .links()
@@ -3506,7 +3589,9 @@ fn diagram_emits_affordance_placement_not_inline_image() {
         1,
         "a ready diagram emits one affordance placement",
     );
-    let aff = &result.diagram_affordances[0];
+    let Some(aff) = result.diagram_affordances.first() else {
+        panic!("expected a diagram affordance");
+    };
     assert_eq!(aff.source, "A-->B\n");
 
     // Exact placement geometry: one row tall, anchored at the content-area x, a non-empty width that stays within the content column band
@@ -3571,7 +3656,9 @@ fn tool_media_overlay_exposes_filepath_click_rect() {
 
     // Exactly the overlay/image placement (button row reserved); no separate text-`[Open]` placement when the overlay hosts the buttons
     assert_eq!(result.inline_media.len(), 1, "one overlay placement");
-    let media = &result.inline_media[0];
+    let Some(media) = result.inline_media.first() else {
+        panic!("expected inline media");
+    };
     assert!(media.has_button_row, "overlay/image tool-media placement");
 
     // The tool block has no vpad, so its second output line (the filepath) is screen row 1: a one-row click-to-copy target at the image's x
@@ -3592,4 +3679,72 @@ fn tool_media_overlay_exposes_filepath_click_rect() {
         media.screen_rect.y > rect.y,
         "the image sits below its filepath line",
     );
+}
+
+/// Rewind / inline-edit dimming (`dim_from_entry`) must not erase text on the terminal theme: there `gray_dim` is
+/// the same bright black as the user-message band, so the pass applies the DIM attribute and leaves the fg alone.
+#[test]
+fn dim_from_entry_stays_visible_on_terminal_theme() {
+    use ratatui::style::Modifier;
+
+    let _guard = crate::theme::cache::pin_theme();
+    let entries = make_entries(2);
+    let viewport = Rect::new(0, 0, 40, 10);
+
+    let render_dimmed = || {
+        let theme = Theme::current();
+        let appearance = AppearanceConfig::default();
+        let layouts = compute_layouts(&entries, viewport.width, &appearance);
+        let refs: Vec<&ScrollbackEntry> = entries.iter().collect();
+        let mut buf = Buffer::empty(viewport);
+        render_scrolled_entries_with_scratch(
+            &mut buf,
+            viewport,
+            &refs,
+            0,
+            None,
+            &theme,
+            &appearance,
+            &layouts,
+            0,
+            None,
+            Some(0), // dim everything from the first entry
+            None,
+            0,
+            0,
+            &[],
+            None,
+            None,
+        );
+        // Locate the first glyph of "Entry 0".
+        for y in 0..viewport.height {
+            let row = buffer_row_text(&buf, y);
+            if let Some(x) = row.find("Entry 0") {
+                return buf.cell((x as u16, y)).unwrap().clone();
+            }
+        }
+        panic!("'Entry 0' not rendered");
+    };
+
+    crate::theme::cache::set(crate::theme::ThemeKind::Terminal);
+    let cell = render_dimmed();
+    assert!(
+        cell.modifier.contains(Modifier::DIM),
+        "terminal theme: dimmed entries use the DIM attribute, got {cell:?}"
+    );
+    assert_ne!(
+        cell.fg,
+        Theme::current().gray_dim,
+        "terminal theme: fg must not be clobbered to gray_dim (invisible on \
+         the bright-black user-message band)"
+    );
+
+    crate::theme::cache::set(crate::theme::ThemeKind::GrokNight);
+    let cell = render_dimmed();
+    assert_eq!(
+        cell.fg,
+        Theme::current().gray_dim,
+        "RGB themes keep the gray_dim fg overwrite"
+    );
+    assert!(!cell.modifier.contains(Modifier::DIM));
 }

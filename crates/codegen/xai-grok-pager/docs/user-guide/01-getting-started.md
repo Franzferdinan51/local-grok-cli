@@ -46,15 +46,20 @@ Update to the latest version at any time:
 grok update
 ```
 
-To fetch a repository through Grove (NFS on macOS, FUSE on Linux) after
-`[clone] enabled = true` in Grove config:
+To fetch a repository through Grove (NFS on macOS, FUSE on Linux), enable
+`grok clone` with `[clone] enabled = true` in Grove config, `GROK_CLONE=1`,
+or the enable-both convenience `GROK_GROVE=1` / `[cli] grove = true` in
+`~/.grok/config.toml`:
 
 ```bash
 grok clone <url> [dir]
 ```
 
 The default is a depth-1 checkout of the selected branch. Pass `--full-history`
-for a complete clone. See [grok clone](27-grok-clone.md).
+for a complete clone. Clone enablement is independent of session / `-w` Grove
+worktrees (the convenience above turns both on; the specific knobs still win).
+the grok.com sign-in below — see [grok clone](27-grok-clone.md#authentication)
+and [Configuration reference](26-config-reference.md).
 
 ---
 
@@ -88,7 +93,7 @@ Once authenticated, Grok presents a full-screen TUI with two main areas:
 
 Type a message and press `Enter` to send it. Grok reads files, runs commands, and edits code as needed. Each tool run streams into the scrollback in real time.
 
-Press `Tab` to move focus between the prompt and the scrollback. While a turn is running, `Esc` cancels it (the exception is fullscreen vim scrollback mode, where mid-turn `Esc` is a no-op; minimal mode cancels even with vim on); `Ctrl+C` cancels once the composer is empty — with a draft, the first press only clears it. Idle, press `Esc` twice within 800ms to clear a non-empty prompt, or (with an empty prompt and conversation messages) to open rewind — see [Keyboard Shortcuts](03-keyboard-shortcuts.md#escape). With the scrollback focused, use the arrow keys to select entries and to collapse or expand them. To navigate with `j`/`k` and fold with `h`/`l` instead, enable Vim mode.
+Press `Tab` to move focus between the prompt and the scrollback. While a turn is running, `Ctrl+C` cancels it once the composer is empty — with a draft, the first press only clears it. `Esc` never cancels a turn; mid-turn it shows a reminder to use `Ctrl+C`. Idle, press `Esc` twice within 800ms to clear a non-empty prompt, or (with an empty prompt and conversation messages) to open rewind — see [Keyboard Shortcuts](03-keyboard-shortcuts.md#escape). With the scrollback focused, use the arrow keys to select entries and to collapse or expand them. To navigate with `j`/`k` and fold with `h`/`l` instead, enable Vim mode.
 
 ### File References
 

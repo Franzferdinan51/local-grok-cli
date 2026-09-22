@@ -1,5 +1,7 @@
 //! Installed grok CLI version, kept in sync with the shipping binaries.
 
+#![deny(clippy::indexing_slicing)]
+
 use std::sync::OnceLock;
 
 use semver::Version;
@@ -14,7 +16,7 @@ pub const VERSION: &str = match option_env!("GROK_VERSION") {
 /// Grok Local fork version. Independent of the grok-build [`VERSION`] we track.
 pub const LOCAL_VERSION: &str = match option_env!("GROK_LOCAL_VERSION") {
     Some(v) => v,
-    None => "0.4.9",
+    None => "0.4.10",
 };
 
 /// Monorepo SHA recorded in the repo-root `SOURCE_REV` file (grok-build identity).

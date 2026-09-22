@@ -4,6 +4,7 @@
 //! Items are sorted running-first, then by start time (newest first).
 //! Each entry dispatches to the correct action type (kill task vs kill agent, view output vs view session) based on its variant.
 
+use chrono::{DateTime, Utc};
 use crossterm::event::{KeyEvent, MouseEventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -22,28 +23,19 @@ use crate::scrollback::layout::HorizontalLayout;
 use crate::syntax::get_syntect;
 use crate::theme::{Theme, ThemeKind};
 use crate::util::format_duration;
-use chrono::{DateTime, Utc};
 
 use super::list_pane::{
     ListItem, ListPane, ListPaneConfig, ListPaneState, ListPaneStyle, WrapMode,
 };
 use super::overlay::OverlayState;
 
-// ---------------------------------------------------------------------------
-// Spinner
-// ---------------------------------------------------------------------------
-
 const SPINNER_DIVISOR: u64 = 4;
 
-// ---------------------------------------------------------------------------
 // Shell command syntax highlighting (used by other modules too)
-// ---------------------------------------------------------------------------
 
-/// Highlight a shell command string into styled spans.
-///
-/// Uses syntect with the best available grammar for the platform: tries "powershell" first on Windows, falls back to "bash".
-/// Returns plain `theme.command` color if no grammar matches.
-/// Results should be cached.
+/// Highlight a shell command string into styled spans. Uses syntect with the best available grammar
+/// for the platform: tries "powershell" first on Windows, falls back to "bash". Returns plain
+/// `theme.command` color if no grammar matches. Results should be cached.
 pub fn highlight_bash_command(command: &str) -> Vec<Span<'static>> {
     let syntect = get_syntect();
     let grammar = if cfg!(windows) { "powershell" } else { "bash" };
@@ -113,25 +105,9 @@ fn dim_spans(spans: &[Span<'static>], blend_factor: f32) -> Vec<Span<'static>> {
         .collect()
 }
 
-// ---------------------------------------------------------------------------
-// Line count badge formatting
-// ---------------------------------------------------------------------------
-
-/// Format an stdout line count as a compact `(N)` badge with SI scaling.
-///
-/// Returns an empty string for `0` so callers can treat that as "no badge".
-/// Truncation (not rounding) is used throughout so the badge never overstates the count.
-/// `1999` renders as `(1.9k)` (not `(2.0k)`), `999_999` as `(999k)` (not `(1.0M)`), and `9_999_999` as `(9.9M)` (not `(10M)`).
-/// Each branch boundary is exact: `1_000_000` is the first count to render with an `M` suffix.
-///
-/// When `truncated` is `true`, a `+` is inserted before the closing paren (`(2.0k+)`) to signal "at least this many".
-/// The rolling buffer has dropped data, so the real total is larger than `count`.
-///
-/// - `<1000`:   `(42)`, `(999)`
-/// - `<10_000`: `(1.0k)`, `(9.9k)`     (one decimal)
-/// - `<1M`:     `(10k)`, `(999k)`      (whole thousands)
-/// - `<10M`:    `(1.0M)`, `(9.9M)`     (one decimal)
-/// - `≥10M`:    `(10M)`, `(999M)`      (whole millions)
+/// Format an stdout line count as a compact `(N)` badge with SI scaling. Truncation (not rounding)
+/// is used throughout so the badge never overstates the count. When `truncated` is `true`, a `+` is
+/// inserted before the closing paren (`(2.0k+)`) to signal "at least this many".
 fn format_line_count_badge(count: usize, truncated: bool) -> String {
     if count == 0 {
         return String::new();
@@ -153,10 +129,6 @@ fn format_line_count_badge(count: usize, truncated: bool) -> String {
     }
     format!("({}M{suffix})", count / 1_000_000)
 }
-
-// ---------------------------------------------------------------------------
-// TaskEntryId: identifies which entry a button belongs to
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskEntryId {
@@ -200,10 +172,6 @@ impl GroupKind {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// TaskEntry: unified entry for the combined list
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub enum TaskEntry {
@@ -310,8 +278,10 @@ impl TaskEntry {
         } else {
             let trimmed = task.command.trim();
             let label = if let Some(nl) = trimmed.find('\n') {
-                let first_line = trimmed[..nl].trim_end();
-                format!("{first_line}\u{2026}")
+                match trimmed.get(..nl) {
+                    Some(first_line) => format!("{}\u{2026}", first_line.trim_end()),
+                    None => trimmed.to_string(),
+                }
             } else {
                 trimmed.to_string()
             };
@@ -350,6 +320,7 @@ impl TaskEntry {
         // Single consolidated label (persona > role > subagent_type > tag > "general") plus description with any `[tag]` prefix stripped
         let (type_label, description) = format_subagent_label(info);
         let model_suffix = info
+            .attempt
             .model
             .as_deref()
             .map(str::trim)
@@ -359,16 +330,16 @@ impl TaskEntry {
         // Label color is state-driven: pending_kill / running stay vivid
         // Completed / failed keep their hue (green / red) but blend toward the background
         // Finished entries recede without losing the success-vs-failure signal
-        let raw_type_color = if info.pending_kill {
+        let raw_type_color = if info.attempt.pending_kill {
             theme.accent_error
         } else if info.is_running() {
             theme.accent_running
-        } else if info.status.as_deref() == Some("completed") {
+        } else if info.attempt.status.as_deref() == Some("completed") {
             theme.accent_success
         } else {
             theme.accent_error
         };
-        let type_color = if info.is_running() || info.pending_kill {
+        let type_color = if info.is_running() || info.attempt.pending_kill {
             raw_type_color
         } else {
             crate::render::color::blend_color(theme.bg_base, raw_type_color, 0.45)
@@ -387,7 +358,7 @@ impl TaskEntry {
         const ACTIVITY_DESC_MAX_WIDTH: usize = 40;
         let activity = info
             .is_running()
-            .then_some(info.activity_label.as_deref())
+            .then_some(info.attempt.activity_label.as_deref())
             .flatten()
             .map(str::trim)
             .filter(|s| !s.is_empty());
@@ -398,11 +369,7 @@ impl TaskEntry {
             None => description.clone(),
         };
 
-        // Skip the trailing-space separator when the cleaned description is empty (reachable when `info.description == "[tag]"`)
-        // Otherwise we render `"Tag "` with a stray trailing space
-        //
-        // The model is not rendered inline here; it's drawn right-aligned in the overlay (just to the left of the elapsed/duration)
-        // The label string below still includes the model so it remains searchable
+        // Otherwise we render `"Tag "` with a stray trailing space.
         let type_sep = if description.is_empty() { "" } else { " " };
         let mut spans = vec![
             Span::styled(format!("{type_label}{type_sep}"), type_style),
@@ -436,7 +403,7 @@ impl TaskEntry {
             label,
             styled,
             running: info.is_running(),
-            started_at: info.started_at,
+            started_at: info.attempt.started_at,
             type_label,
         }
     }
@@ -466,26 +433,7 @@ impl TaskEntry {
             Style::default().fg(theme.gray_bright)
         };
 
-        let suffix = if running {
-            let phase = run
-                .current_phase
-                .as_deref()
-                .map(str::trim)
-                .filter(|p| !p.is_empty());
-            let agents = match run.agents.iter().filter(|a| a.state == "running").count() {
-                0 => None,
-                1 => Some("1 agent".to_string()),
-                n => Some(format!("{n} agents")),
-            };
-            match (phase, agents) {
-                (Some(p), Some(a)) => format!("{p} · {a}"),
-                (Some(p), None) => p.to_string(),
-                (None, Some(a)) => a,
-                (None, None) => "running".to_string(),
-            }
-        } else {
-            run.status.replace('_', " ")
-        };
+        let suffix = run.activity_label();
 
         let mut spans = vec![
             Span::styled("Workflow ".to_string(), Style::default().fg(tag_color)),
@@ -519,9 +467,8 @@ impl TaskEntry {
 
     fn from_scheduled(
         info: &ScheduledTaskInfo,
-        current_cron: Option<&str>,
-        is_queued: bool,
         linked: Option<(String, bool)>,
+        now: DateTime<Utc>,
     ) -> Self {
         let linked_running = linked.as_ref().is_some_and(|(_, running)| *running);
         let theme = Theme::current();
@@ -530,41 +477,13 @@ impl TaskEntry {
         } else {
             info.prompt.clone()
         };
-        let countdown = |schedule: &str, created: std::time::Instant| -> String {
-            if let Some(secs) = crate::util::parse_schedule_interval_secs(schedule) {
-                let approx = created + std::time::Duration::from_secs(secs);
-                let now = std::time::Instant::now();
-                if approx > now {
-                    format!(" (next in {})", format_duration(approx.duration_since(now)))
-                } else {
-                    " (due now)".to_string()
-                }
-            } else {
-                String::new()
-            }
-        };
         let is_provisional = info.task_id.starts_with("provisional-");
-        let suffix = if current_cron == Some(&info.task_id) || linked_running {
-            " (running)".to_string()
-        } else if is_queued {
-            " (queued)".to_string()
+        let suffix = if linked_running {
+            " (running)".to_owned()
         } else if is_provisional {
-            " (starting)".to_string()
-        } else if let Some(n) = &info.next_fire_at {
-            if let Ok(dt) = DateTime::<chrono::FixedOffset>::parse_from_rfc3339(n) {
-                let dt = dt.with_timezone(&Utc);
-                let now = Utc::now();
-                if dt > now {
-                    let dur = (dt - now).to_std().unwrap_or_default();
-                    format!(" (next in {})", format_duration(dur))
-                } else {
-                    " (due now)".to_string()
-                }
-            } else {
-                countdown(&info.human_schedule, info.created_at)
-            }
+            " (starting)".to_owned()
         } else {
-            countdown(&info.human_schedule, info.created_at)
+            super::scheduled_next::next_suffix(info, now)
         };
         // Capitalize the tag for display (`loop` becomes `Loop`) so it reads as a proper label, matching the monitor row's `Monitor` tag
         let tag_display = {
@@ -727,10 +646,6 @@ impl ListItem for TaskEntry {
     }
 }
 
-// ---------------------------------------------------------------------------
-// TasksPane
-// ---------------------------------------------------------------------------
-
 /// Temporary data for the overlay pass (avoids borrowing entries during mutation).
 enum OverlayEntryData {
     BgTask(String),
@@ -780,11 +695,8 @@ impl Default for TasksPane {
     }
 }
 
-/// Fill overlay cells with spaces so label text doesn't bleed through.
-///
-/// When the label extends into the area we're about to clear, place an ellipsis `…` at the cell immediately to the left of the clear boundary.
-/// The user then sees that the row was truncated rather than just clipped silently.
-/// The ellipsis inherits the style of the cell it lands on so it blends with the surrounding label text.
+/// Fill overlay cells with spaces so label text doesn't bleed through. The user then sees that the
+/// row was truncated rather than just clipped silently.
 fn clear_overlay_area(buf: &mut Buffer, area: Rect, y: u16, overlay_w: u16) {
     let clamped = overlay_w.min(area.width);
     if clamped == 0 {
@@ -871,15 +783,11 @@ impl TasksPane {
         }
     }
 
-    // -- Data sync -----------------------------------------------------------
-
     pub fn sync(
         &mut self,
         bg_tasks: &std::collections::BTreeMap<String, BgTaskState>,
         subagents: &HashMap<String, SubagentInfo>,
         scheduled: &HashMap<String, ScheduledTaskInfo>,
-        current_cron_task_id: Option<&str>,
-        queued_cron_ids: &std::collections::HashSet<&str>,
         workflow_runs: &[crate::views::workflows::WorkflowRunSnapshot],
     ) {
         // Detect theme switch and refresh caches.
@@ -904,7 +812,7 @@ impl TasksPane {
         }
 
         for info in subagents.values() {
-            if info.workflow_run_id.is_some() {
+            if info.attempt.workflow_run_id.is_some() {
                 continue;
             }
             if self.show_done || info.is_running() {
@@ -913,6 +821,7 @@ impl TasksPane {
         }
 
         // Add scheduled task items (always "running")
+        let now = Utc::now();
         for info in scheduled.values() {
             let linked = info.last_subagent_id.as_deref().and_then(|sid| {
                 subagents
@@ -920,12 +829,8 @@ impl TasksPane {
                     .find(|s| s.subagent_id.as_ref() == sid)
                     .map(|s| (sid.to_string(), s.is_running()))
             });
-            self.items.push(TaskEntry::from_scheduled(
-                info,
-                current_cron_task_id,
-                queued_cron_ids.contains(info.task_id.as_str()),
-                linked,
-            ));
+            self.items
+                .push(TaskEntry::from_scheduled(info, linked, now));
         }
 
         self.workflow_runs = workflow_runs.to_vec();
@@ -983,10 +888,12 @@ impl TasksPane {
         if !self.collapsed_groups.is_empty() {
             let mut present = [false; GROUP_KIND_COUNT];
             for it in &self.items {
-                present[it.group_kind().order() as usize] = true;
+                if let Some(slot) = present.get_mut(it.group_kind().order() as usize) {
+                    *slot = true;
+                }
             }
             self.collapsed_groups
-                .retain(|g| present[g.order() as usize]);
+                .retain(|g| present.get(g.order() as usize).copied().unwrap_or(false));
         }
 
         // Build the display list: group headers and (non-collapsed) items
@@ -1028,7 +935,9 @@ impl TasksPane {
         // Per-group item counts (indexed by `GroupKind::order`).
         let mut counts: [usize; GROUP_KIND_COUNT] = [0; GROUP_KIND_COUNT];
         for it in &self.items {
-            counts[it.group_kind().order() as usize] += 1;
+            if let Some(count) = counts.get_mut(it.group_kind().order() as usize) {
+                *count += 1;
+            }
         }
         let mut last: Option<GroupKind> = None;
         for it in &self.items {
@@ -1037,7 +946,7 @@ impl TasksPane {
                 let collapsed = self.collapsed_groups.contains(&group);
                 self.entries.push(TaskEntry::header(
                     group,
-                    counts[group.order() as usize],
+                    counts.get(group.order() as usize).copied().unwrap_or(0),
                     collapsed,
                 ));
                 last = Some(group);
@@ -1108,7 +1017,9 @@ impl TasksPane {
                 .count()
                 + subagents
                     .values()
-                    .filter(|subagent| subagent.is_running() && subagent.workflow_run_id.is_none())
+                    .filter(|subagent| {
+                        subagent.is_running() && subagent.attempt.workflow_run_id.is_none()
+                    })
                     .count()
                 + scheduled.len()
                 + workflow_runs.iter().filter(|run| run.is_active()).count(),
@@ -1119,10 +1030,12 @@ impl TasksPane {
         }
     }
 
-    // -- Visibility ----------------------------------------------------------
-
     pub fn show_done(&self) -> bool {
         self.show_done
+    }
+
+    pub fn toggle_show_done(&mut self) {
+        self.show_done = !self.show_done;
     }
 
     pub fn is_visible(&self) -> bool {
@@ -1149,17 +1062,14 @@ impl TasksPane {
         }
         let fraction_cap = (view_height as f32 * MAX_TASKS_FRACTION).floor() as u16;
         let max = MAX_TASKS_HEIGHT.min(fraction_cap).max(1);
-        // Reserve one extra row for the search/filter input bar (or an accepted matcher's status line)
-        // The bar then gets its own line instead of displacing the last task/agent entry
-        // `ListPane` carves the bar out of the bottom of the area it's given
-        // Without this the pane would show one fewer entry the moment `/` (or `f`) is pressed
+        // Reserve one extra row for the search/filter input bar (or an accepted matcher's status line).
+        // The bar then gets its own line instead of displacing the last task/agent entry `ListPane` carves
+        // the bar out of the bottom of the area it's given.
         let bar = u16::from(
             self.list_state.input_mode().is_some() || self.list_state.matcher().is_some(),
         );
         (count as u16).min(max).max(1) + bar
     }
-
-    // -- Tick ----------------------------------------------------------------
 
     pub fn tick(&mut self) -> bool {
         self.tick += 1;
@@ -1173,8 +1083,6 @@ impl TasksPane {
     pub fn needs_tick(&self) -> bool {
         self.entries.iter().any(|e| e.is_running())
     }
-
-    // -- Input handling ------------------------------------------------------
 
     pub fn handle_key(&mut self, key: &KeyEvent) -> bool {
         if crate::key!('h').matches(key) && self.list_state.input_mode().is_none() {
@@ -1241,8 +1149,6 @@ impl TasksPane {
         }
     }
 
-    // -- Rendering -----------------------------------------------------------
-
     fn content_area(area: Rect, layout_cfg: &LayoutConfig) -> Rect {
         let pad_left = HorizontalLayout::ACCENT + layout_cfg.block_pad_left;
         let pad_right = layout_cfg.block_pad_right;
@@ -1291,10 +1197,8 @@ impl TasksPane {
             return;
         }
 
-        // Decide the reserved indicator rows from the CURRENT scroll offset (NoWrap means one row per entry, so the total is the entry count)
-        // Then prepare the layout exactly once with the final viewport
-        // Preparing first with the full `inner` height would clamp the offset to that larger viewport's max
-        // The offset would then sit short of the smaller viewport's bottom, so ▼ could never turn off at the end
+        // Then prepare the layout exactly once with the final viewport. The offset would then sit short of
+        // the smaller viewport's bottom, so ▼ could never turn off at the end.
         let total = self.entries.len();
         let scrollable = total > inner.height as usize && inner.height >= 3;
         let scroll = self.list_state.scroll_offset();
@@ -1316,14 +1220,9 @@ impl TasksPane {
         self.list_state
             .prepare_layout(&self.entries, list_area.width, list_area.height);
 
-        // ListPane draws its scrollbar in the last column of the area it's given
-        // The overlay (right-aligned kill/view buttons) paints over that same column, covering the scrollbar
-        // Hand the list an area extended one column into the right padding so the scrollbar lands just past the overlay's right edge
-        //
-        // Only widen when the list will *actually* draw a scrollbar there (content overflows the viewport)
-        // When it won't, ListPane gives the full area to content, so the extra column would fill with label text
-        // That text bleeds one cell past the overlay's `[✗]` button (the overlay only clears within `list_area`)
-        // Keeping `lp_area == list_area` then lets the overlay truncate the label cleanly before the button, with nothing rendered to its right
+        // ListPane draws its scrollbar in the last column of the area it's given. Only widen when the list
+        // will actually draw a scrollbar there (content overflows the viewport). When it won't, ListPane
+        // gives the full area to content, so the extra column would fill with label text.
         let needs_scrollbar = total > list_area.height as usize;
         let lp_area = if needs_scrollbar && list_area.right() < area.right() {
             Rect {
@@ -1354,10 +1253,8 @@ impl TasksPane {
             );
         }
 
-        // Overlay pass, positioned over the list area so the kill/view button rows line up with the rows the list actually rendered
-        // When the search/filter input bar (or an accepted matcher's status) is open, `ListPane` reserves the bottom row(s) of `list_area` for it
-        // Shrink the overlay area to match
-        // Otherwise the spinner icons and kill/view buttons paint over the input bar (e.g. the `⸬` spinner corrupting `search:` into `⸬earch:`).
+        // Otherwise the spinner icons and kill/view buttons paint over the input bar (e.g. the `⸬` spinner
+        // corrupting `search:` into `⸬earch:`).
         let bar_height = self.list_state.bottom_bar_height(list_area.height);
         let overlay_area = Rect {
             height: list_area.height.saturating_sub(bar_height),
@@ -1457,7 +1354,10 @@ impl TasksPane {
         let (icon, icon_style) = if running {
             let frames = crate::glyphs::dot_spinner_frames();
             let frame_idx = (self.tick / SPINNER_DIVISOR) as usize % frames.len();
-            (frames[frame_idx], Style::default().fg(theme.accent_running))
+            (
+                frames.get(frame_idx).copied().unwrap_or(""),
+                Style::default().fg(theme.accent_running),
+            )
         } else if run.status == "complete" {
             (
                 crate::glyphs::check_mark(),
@@ -1526,7 +1426,7 @@ impl TasksPane {
             let frames = crate::glyphs::dot_spinner_frames();
             let frame_idx = (self.tick / SPINNER_DIVISOR) as usize % frames.len();
             (
-                frames[frame_idx],
+                frames.get(frame_idx).copied().unwrap_or(""),
                 Style::default().fg(theme.accent_error),
                 "killing\u{2026} ".to_string(),
                 Style::default().fg(theme.accent_error),
@@ -1538,7 +1438,7 @@ impl TasksPane {
                     let frame_idx = (self.tick / SPINNER_DIVISOR) as usize % frames.len();
                     let elapsed = format_duration(task.elapsed());
                     (
-                        frames[frame_idx],
+                        frames.get(frame_idx).copied().unwrap_or(""),
                         Style::default().fg(theme.accent_running),
                         format!("{elapsed} "),
                         Style::default().fg(theme.gray),
@@ -1567,11 +1467,7 @@ impl TasksPane {
 
         buf.set_span(area.x, y, &Span::styled(icon, icon_style), 2);
 
-        // Stdout line count, shown just to the left of the duration as a compact `(N)` badge with SI scaling (`(1.2k)`, `(5.4M)`)
-        // The scaling keeps huge outputs from pushing the label off-screen
-        // The badge hides when there's no captured output and renders dim like the time text
-        // It reads the cached `stdout_line_count` (maintained by `BgTaskState::set_stdout` / `append_stdout`)
-        // The overlay therefore never memchr-scans the full buffer per render frame
+        // The overlay therefore never memchr-scans the full buffer per render frame.
         let badge = format_line_count_badge(task.stdout_line_count, task.truncated);
         let lines_text = if badge.is_empty() {
             String::new()
@@ -1668,11 +1564,11 @@ impl TasksPane {
         info: &SubagentInfo,
         theme: &Theme,
     ) {
-        let (icon, icon_style, right_text, right_style) = if info.pending_kill {
+        let (icon, icon_style, right_text, right_style) = if info.attempt.pending_kill {
             let frames = crate::glyphs::dot_spinner_frames();
             let frame_idx = (self.tick / SPINNER_DIVISOR) as usize % frames.len();
             (
-                frames[frame_idx],
+                frames.get(frame_idx).copied().unwrap_or(""),
                 Style::default().fg(theme.accent_error),
                 "killing\u{2026} ".to_string(),
                 Style::default().fg(theme.accent_error),
@@ -1682,12 +1578,12 @@ impl TasksPane {
             let frame_idx = (self.tick / SPINNER_DIVISOR) as usize % frames.len();
             let elapsed = format_duration(info.display_elapsed());
             (
-                frames[frame_idx],
+                frames.get(frame_idx).copied().unwrap_or(""),
                 Style::default().fg(theme.accent_running),
                 format!("{elapsed} "),
                 Style::default().fg(theme.gray),
             )
-        } else if info.status.as_deref() == Some("completed") {
+        } else if info.attempt.status.as_deref() == Some("completed") {
             let elapsed = format_duration(info.display_elapsed());
             (
                 crate::glyphs::check_mark(),
@@ -1710,6 +1606,7 @@ impl TasksPane {
         // Clear overlay area to prevent label text bleeding through.
         let badge = format_context_badge(info);
         let model_text = info
+            .attempt
             .model
             .as_deref()
             .map(str::trim)
@@ -1821,7 +1718,10 @@ impl TasksPane {
         buf.set_span(
             area.x,
             y,
-            &Span::styled(frames[frame_idx], Style::default().fg(theme.accent_running)),
+            &Span::styled(
+                frames.get(frame_idx).copied().unwrap_or(""),
+                Style::default().fg(theme.accent_running),
+            ),
             2,
         );
 
@@ -1888,45 +1788,65 @@ mod status_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::{BTreeMap, HashMap, HashSet};
+    use std::collections::{BTreeMap, HashMap};
     use std::sync::Arc;
     use std::time::Instant;
 
+    fn pane_item(pane: &TasksPane, i: usize) -> &TaskEntry {
+        let Some(item) = pane.items.get(i) else {
+            panic!("items[{i}] missing, have {}", pane.items.len());
+        };
+        item
+    }
+
+    fn pane_entry(pane: &TasksPane, i: usize) -> &TaskEntry {
+        let Some(entry) = pane.entries.get(i) else {
+            panic!("entries[{i}] missing, have {}", pane.entries.len());
+        };
+        entry
+    }
+
     fn make_info() -> SubagentInfo {
+        let now = Instant::now();
         SubagentInfo {
             subagent_id: Arc::from("sa-1"),
             child_session_id: Arc::from("cs-1"),
             description: Arc::from("Find API endpoints"),
             subagent_type: Arc::from("explore"),
-            persona: None,
-            role: None,
-            model: None,
-            context_source: None,
-            resumed_from: None,
-            capability_mode: None,
-            workflow_run_id: None,
-            context_normalized: false,
-            parent_prompt_id: None,
-            started_at: Instant::now(),
-            last_progress_at: Instant::now(),
-            finished: false,
-            status: None,
-            error: None,
-            duration_ms: None,
-            tool_calls: None,
-            turns: None,
-            turn_count: None,
-            tool_call_count: None,
-            tokens_used: None,
-            context_window_tokens: None,
-            context_usage_pct: None,
-            tools_used: Vec::new(),
-            error_count: None,
-            activity_label: None,
-            is_background: false,
-            pending_kill: false,
-            kill_requested_at: None,
-            scrollback_entry_id: None,
+            attempt: crate::app::subagent::SubagentAttemptInfo {
+                lifecycle: crate::app::subagent::SubagentLifecycleState::running_legacy_for_test(),
+                persona: None,
+                role: None,
+                model: None,
+                context_source: None,
+                resumed_from: None,
+                capability_mode: None,
+                workflow_run_id: None,
+                context_normalized: false,
+                parent_prompt_id: None,
+                started_at: now,
+                last_progress_at: now,
+                status: None,
+                error: None,
+                duration_ms: None,
+                tool_calls: None,
+                turns: None,
+                turn_count: None,
+                tool_call_count: None,
+                tokens_used: None,
+                context_window_tokens: None,
+                context_usage_pct: None,
+                tools_used: Vec::new(),
+                error_count: None,
+                activity_label: None,
+                is_background: false,
+                pending_kill: false,
+                kill_requested_at: None,
+                scrollback_entry_id: None,
+                terminal_entry_id: None,
+            },
+            completed_attempt_tokens: 0,
+            sealed_attempt_tokens: Default::default(),
             prompt: None,
             child_cwd: None,
             worktree_path: None,
@@ -2069,10 +1989,13 @@ mod tests {
         };
         let theme = Theme::current();
         assert_eq!(styled.spans.len(), 2);
-        assert_eq!(styled.spans[0].content.as_ref(), "Task ");
-        assert_eq!(styled.spans[0].style.fg, Some(theme.text_secondary));
-        assert_eq!(styled.spans[1].content.as_ref(), "Run release tests");
-        assert_eq!(styled.spans[1].style.fg, Some(theme.text_primary));
+        let [prefix, desc] = styled.spans.as_slice() else {
+            panic!("expected two spans: {:?}", styled.spans);
+        };
+        assert_eq!(prefix.content.as_ref(), "Task ");
+        assert_eq!(prefix.style.fg, Some(theme.text_secondary));
+        assert_eq!(desc.content.as_ref(), "Run release tests");
+        assert_eq!(desc.style.fg, Some(theme.text_primary));
     }
 
     #[test]
@@ -2090,13 +2013,13 @@ mod tests {
         let theme = Theme::current();
         assert_eq!(label, "Monitor incrementing event counter every 3s");
         assert_eq!(styled.spans.len(), 2);
-        assert_eq!(styled.spans[0].content.as_ref(), "Monitor ");
-        assert_eq!(styled.spans[0].style.fg, Some(theme.accent_system));
-        assert_eq!(
-            styled.spans[1].content.as_ref(),
-            "incrementing event counter every 3s"
-        );
-        assert_eq!(styled.spans[1].style.fg, Some(theme.text_secondary));
+        let [prefix, desc] = styled.spans.as_slice() else {
+            panic!("expected two spans: {:?}", styled.spans);
+        };
+        assert_eq!(prefix.content.as_ref(), "Monitor ");
+        assert_eq!(prefix.style.fg, Some(theme.accent_system));
+        assert_eq!(desc.content.as_ref(), "incrementing event counter every 3s");
+        assert_eq!(desc.style.fg, Some(theme.text_secondary));
     }
 
     #[test]
@@ -2214,14 +2137,7 @@ mod tests {
         let mut bg_tasks = std::collections::BTreeMap::new();
         bg_tasks.insert("t1".into(), task);
 
-        pane.sync(
-            &bg_tasks,
-            &HashMap::new(),
-            &HashMap::new(),
-            None,
-            &HashSet::new(),
-            &[],
-        );
+        pane.sync(&bg_tasks, &HashMap::new(), &HashMap::new(), &[]);
 
         // 12+ rows so `desired_height` is non-zero; wide enough that the overlay isn't clipped
         let lines = render_pane_to_strings(&mut pane, &bg_tasks, 80, 16);
@@ -2244,14 +2160,7 @@ mod tests {
         let mut bg_tasks = std::collections::BTreeMap::new();
         bg_tasks.insert("t-restored".to_string(), restored);
 
-        pane.sync(
-            &bg_tasks,
-            &HashMap::new(),
-            &HashMap::new(),
-            None,
-            &HashSet::new(),
-            &[],
-        );
+        pane.sync(&bg_tasks, &HashMap::new(), &HashMap::new(), &[]);
         assert!(
             !pane.is_visible(),
             "replay-restored running tasks must not auto-open the tasks pane"
@@ -2262,14 +2171,7 @@ mod tests {
             "t-live".to_string(),
             make_bg_task("t-live", "cargo build", BgTaskStatus::Running),
         );
-        pane.sync(
-            &bg_tasks,
-            &HashMap::new(),
-            &HashMap::new(),
-            None,
-            &HashSet::new(),
-            &[],
-        );
+        pane.sync(&bg_tasks, &HashMap::new(), &HashMap::new(), &[]);
         assert!(
             pane.is_visible(),
             "a new live running task must still auto-open the tasks pane"
@@ -2288,14 +2190,7 @@ mod tests {
         let mut bg_tasks = std::collections::BTreeMap::new();
         bg_tasks.insert("t1".into(), task);
 
-        pane.sync(
-            &bg_tasks,
-            &HashMap::new(),
-            &HashMap::new(),
-            None,
-            &HashSet::new(),
-            &[],
-        );
+        pane.sync(&bg_tasks, &HashMap::new(), &HashMap::new(), &[]);
 
         let lines = render_pane_to_strings(&mut pane, &bg_tasks, 80, 16);
         let joined = lines.join("\n");
@@ -2316,14 +2211,7 @@ mod tests {
         let mut bg_tasks = std::collections::BTreeMap::new();
         bg_tasks.insert("t1".into(), task);
 
-        pane.sync(
-            &bg_tasks,
-            &HashMap::new(),
-            &HashMap::new(),
-            None,
-            &HashSet::new(),
-            &[],
-        );
+        pane.sync(&bg_tasks, &HashMap::new(), &HashMap::new(), &[]);
 
         let lines = render_pane_to_strings(&mut pane, &bg_tasks, 80, 16);
         let joined = lines.join("\n");
@@ -2335,10 +2223,8 @@ mod tests {
 
     #[test]
     fn search_bar_not_overwritten_by_task_overlay() {
-        // Regression: while subagents/tasks are running, opening the search bar (`/`) used to render broken UI
-        // The overlay pass (spinner and kill/view buttons) painted over the bottom input-bar row that `ListPane` reserves
-        // That corrupted `search:` into `⸬earch:` (the `⸬` spinner glyph clobbering the leading `s`)
-        // The overlay must stop one row short of the input bar
+        // Regression: while subagents/tasks are running, opening the search bar (`/`) used to render
+        // broken UI. The overlay must stop one row short of the input bar.
         let mut pane = TasksPane::new();
         pane.overlay.show();
 
@@ -2354,14 +2240,7 @@ mod tests {
                 ),
             );
         }
-        pane.sync(
-            &bg_tasks,
-            &HashMap::new(),
-            &HashMap::new(),
-            None,
-            &HashSet::new(),
-            &[],
-        );
+        pane.sync(&bg_tasks, &HashMap::new(), &HashMap::new(), &[]);
 
         // Press `/` to open the search bar.
         assert!(pane.handle_key(&crate::key!('/').to_key_event()));
@@ -2411,14 +2290,7 @@ mod tests {
                 ),
             );
         }
-        pane.sync(
-            &bg_tasks,
-            &HashMap::new(),
-            &HashMap::new(),
-            None,
-            &HashSet::new(),
-            &[],
-        );
+        pane.sync(&bg_tasks, &HashMap::new(), &HashMap::new(), &[]);
 
         // Tall enough that all entries fit without scrolling.
         let view_height = 40u16;
@@ -2463,14 +2335,7 @@ mod tests {
             ),
         );
 
-        pane.sync(
-            &BTreeMap::new(),
-            &HashMap::new(),
-            &scheduled,
-            None,
-            &HashSet::new(),
-            &[],
-        );
+        pane.sync(&BTreeMap::new(), &HashMap::new(), &scheduled, &[]);
 
         // One header and one loop row in a tall pane: not scrollable
         let area = Rect::new(0, 0, 40, 10);
@@ -2498,7 +2363,10 @@ mod tests {
                 .collect();
             if let Some(x) = row.iter().position(|s| s == "\u{2717}") {
                 found = true;
-                for cell in &row[x + 2..] {
+                let Some(tail) = row.get(x + 2..) else {
+                    panic!("cells after kill glyph missing: {row:?}");
+                };
+                for cell in tail {
                     assert!(
                         cell.trim().is_empty(),
                         "non-blank cell after `[✗]` on loop row: {row:?}",
@@ -2522,14 +2390,7 @@ mod tests {
             );
         }
 
-        pane.sync(
-            &bg_tasks,
-            &HashMap::new(),
-            &HashMap::new(),
-            None,
-            &HashSet::new(),
-            &[],
-        );
+        pane.sync(&bg_tasks, &HashMap::new(), &HashMap::new(), &[]);
 
         // A short panel forces the list to overflow; at the top of the list a centered ▼ appears on the reserved bottom row
         let lines = render_pane_to_strings(&mut pane, &bg_tasks, 40, 6);
@@ -2553,14 +2414,7 @@ mod tests {
             );
         }
 
-        pane.sync(
-            &bg_tasks,
-            &HashMap::new(),
-            &HashMap::new(),
-            None,
-            &HashSet::new(),
-            &[],
-        );
+        pane.sync(&bg_tasks, &HashMap::new(), &HashMap::new(), &[]);
 
         // Establish the viewport, then scroll to the very bottom.
         let _ = render_pane_to_strings(&mut pane, &bg_tasks, 40, 6);
@@ -2594,18 +2448,17 @@ mod tests {
             make_bg_task("running", "sleep 99", BgTaskStatus::Running),
         );
 
-        pane.sync(
-            &bg_tasks,
-            &HashMap::new(),
-            &HashMap::new(),
-            None,
-            &HashSet::new(),
-            &[],
-        );
+        pane.sync(&bg_tasks, &HashMap::new(), &HashMap::new(), &[]);
 
         assert!(pane.items.len() >= 2);
-        assert!(pane.items[0].is_running(), "first entry should be running",);
-        assert!(!pane.items[1].is_running(), "second entry should be done",);
+        assert!(
+            pane_item(&pane, 0).is_running(),
+            "first entry should be running",
+        );
+        assert!(
+            !pane_item(&pane, 1).is_running(),
+            "second entry should be done",
+        );
     }
 
     #[test]
@@ -2618,26 +2471,19 @@ mod tests {
 
         let mut subagents = HashMap::new();
         let mut info = make_info();
-        info.finished = true;
-        info.status = Some("completed".into());
+        info.set_finished_for_test(true);
+        info.attempt.status = Some("completed".into());
         subagents.insert("cs-1".into(), info);
 
-        pane.sync(
-            &bg_tasks,
-            &subagents,
-            &HashMap::new(),
-            None,
-            &HashSet::new(),
-            &[],
-        );
+        pane.sync(&bg_tasks, &subagents, &HashMap::new(), &[]);
 
         assert_eq!(pane.items.len(), 2);
         assert!(
-            matches!(&pane.items[0], TaskEntry::Agent { .. }),
+            matches!(pane_item(&pane, 0), TaskEntry::Agent { .. }),
             "agents should sort before bg tasks",
         );
         assert!(
-            matches!(&pane.items[1], TaskEntry::BgTask { .. }),
+            matches!(pane_item(&pane, 1), TaskEntry::BgTask { .. }),
             "bg tasks should sort after agents",
         );
     }
@@ -2657,23 +2503,16 @@ mod tests {
         let mut subagents = HashMap::new();
         subagents.insert("cs-1".into(), make_info()); // running subagent
 
-        pane.sync(
-            &bg_tasks,
-            &subagents,
-            &HashMap::new(),
-            None,
-            &HashSet::new(),
-            &[],
-        );
+        pane.sync(&bg_tasks, &subagents, &HashMap::new(), &[]);
 
         assert_eq!(pane.items.len(), 3);
         assert!(
-            matches!(&pane.items[0], TaskEntry::Agent { .. }),
+            matches!(pane_item(&pane, 0), TaskEntry::Agent { .. }),
             "subagent first",
         );
         assert!(
             matches!(
-                &pane.items[1],
+                pane_item(&pane, 1),
                 TaskEntry::BgTask {
                     is_monitor: false,
                     ..
@@ -2683,7 +2522,7 @@ mod tests {
         );
         assert!(
             matches!(
-                &pane.items[2],
+                pane_item(&pane, 2),
                 TaskEntry::BgTask {
                     is_monitor: true,
                     ..
@@ -2710,29 +2549,22 @@ mod tests {
             make_scheduled_info("l1", "every 1m", "do x", None),
         );
 
-        pane.sync(
-            &bg_tasks,
-            &HashMap::new(),
-            &scheduled,
-            None,
-            &HashSet::new(),
-            &[],
-        );
+        pane.sync(&bg_tasks, &HashMap::new(), &scheduled, &[]);
 
         // items: monitor first, then loop.
         assert_eq!(pane.items.len(), 2);
         assert!(matches!(
-            &pane.items[0],
+            pane_item(&pane, 0),
             TaskEntry::BgTask {
                 is_monitor: true,
                 ..
             }
         ));
-        assert!(matches!(&pane.items[1], TaskEntry::Scheduled { .. }));
+        assert!(matches!(pane_item(&pane, 1), TaskEntry::Scheduled { .. }));
 
         // entries: ONE Watchers header (count 2), then monitor, then loop.
         assert_eq!(pane.entries.len(), 3);
-        let header_text: String = match &pane.entries[0] {
+        let header_text: String = match pane_entry(&pane, 0) {
             TaskEntry::Header {
                 group: GroupKind::Watchers,
                 styled,
@@ -2742,13 +2574,13 @@ mod tests {
         assert!(header_text.contains("Watchers"), "got: {header_text}");
         assert!(header_text.contains('2'), "combined count: {header_text}");
         assert!(matches!(
-            &pane.entries[1],
+            pane_entry(&pane, 1),
             TaskEntry::BgTask {
                 is_monitor: true,
                 ..
             }
         ));
-        assert!(matches!(&pane.entries[2], TaskEntry::Scheduled { .. }));
+        assert!(matches!(pane_entry(&pane, 2), TaskEntry::Scheduled { .. }));
     }
 
     #[test]
@@ -2765,17 +2597,10 @@ mod tests {
             make_bg_task("running", "sleep 99", BgTaskStatus::Running),
         );
 
-        pane.sync(
-            &bg_tasks,
-            &HashMap::new(),
-            &HashMap::new(),
-            None,
-            &HashSet::new(),
-            &[],
-        );
+        pane.sync(&bg_tasks, &HashMap::new(), &HashMap::new(), &[]);
 
         assert_eq!(pane.items.len(), 1, "only running tasks shown by default");
-        assert!(pane.items[0].is_running());
+        assert!(pane_item(&pane, 0).is_running());
     }
 
     #[test]
@@ -2786,36 +2611,29 @@ mod tests {
         let mut subagents = HashMap::new();
         subagents.insert("cs-1".into(), make_info()); // running subagent
 
-        pane.sync(
-            &bg_tasks,
-            &subagents,
-            &HashMap::new(),
-            None,
-            &HashSet::new(),
-            &[],
-        );
+        pane.sync(&bg_tasks, &subagents, &HashMap::new(), &[]);
 
         // Display list interleaves a header before each group's items: [Header(Subagents), Agent, Header(Tasks), BgTask]
         assert_eq!(pane.entries.len(), 4);
         assert!(matches!(
-            &pane.entries[0],
+            pane_entry(&pane, 0),
             TaskEntry::Header {
                 group: GroupKind::Subagents,
                 ..
             }
         ));
-        assert!(matches!(&pane.entries[1], TaskEntry::Agent { .. }));
+        assert!(matches!(pane_entry(&pane, 1), TaskEntry::Agent { .. }));
         assert!(matches!(
-            &pane.entries[2],
+            pane_entry(&pane, 2),
             TaskEntry::Header {
                 group: GroupKind::Tasks,
                 ..
             }
         ));
-        assert!(matches!(&pane.entries[3], TaskEntry::BgTask { .. }));
+        assert!(matches!(pane_entry(&pane, 3), TaskEntry::BgTask { .. }));
 
         // The header text carries the label and the count.
-        let header_text: String = match &pane.entries[0] {
+        let header_text: String = match pane_entry(&pane, 0) {
             TaskEntry::Header { styled, .. } => {
                 styled.spans.iter().map(|s| s.content.as_ref()).collect()
             }
@@ -2834,20 +2652,18 @@ mod tests {
             &std::collections::BTreeMap::new(),
             &subagents,
             &HashMap::new(),
-            None,
-            &HashSet::new(),
             &[],
         );
 
         // Expanded: header and item
         assert_eq!(pane.entries.len(), 2);
-        assert!(matches!(&pane.entries[1], TaskEntry::Agent { .. }));
+        assert!(matches!(pane_entry(&pane, 1), TaskEntry::Agent { .. }));
 
         // Collapse: only the header remains
         pane.toggle_group(GroupKind::Subagents);
         assert_eq!(pane.entries.len(), 1);
         assert!(matches!(
-            &pane.entries[0],
+            pane_entry(&pane, 0),
             TaskEntry::Header {
                 group: GroupKind::Subagents,
                 ..
@@ -2857,7 +2673,7 @@ mod tests {
         // Expand: the item returns
         pane.toggle_group(GroupKind::Subagents);
         assert_eq!(pane.entries.len(), 2);
-        assert!(matches!(&pane.entries[1], TaskEntry::Agent { .. }));
+        assert!(matches!(pane_entry(&pane, 1), TaskEntry::Agent { .. }));
     }
 
     #[test]
@@ -2871,8 +2687,6 @@ mod tests {
             &std::collections::BTreeMap::new(),
             &subagents,
             &HashMap::new(),
-            None,
-            &HashSet::new(),
             &[],
         );
         assert_eq!(pane.entries.len(), 2);
@@ -2887,7 +2701,7 @@ mod tests {
         // Right expands it again
         assert!(pane.set_group_collapsed(GroupKind::Subagents, false));
         assert_eq!(pane.entries.len(), 2);
-        assert!(matches!(&pane.entries[1], TaskEntry::Agent { .. }));
+        assert!(matches!(pane_entry(&pane, 1), TaskEntry::Agent { .. }));
         // Right again: already expanded, no change
         assert!(!pane.set_group_collapsed(GroupKind::Subagents, false));
         assert_eq!(pane.entries.len(), 2);
@@ -2904,8 +2718,6 @@ mod tests {
             &std::collections::BTreeMap::new(),
             &subagents,
             &HashMap::new(),
-            None,
-            &HashSet::new(),
             &[],
         );
 
@@ -2917,8 +2729,6 @@ mod tests {
             &std::collections::BTreeMap::new(),
             &HashMap::new(),
             &HashMap::new(),
-            None,
-            &HashSet::new(),
             &[],
         );
         assert!(!pane.collapsed_groups.contains(&GroupKind::Subagents));
@@ -2933,12 +2743,10 @@ mod tests {
             &std::collections::BTreeMap::new(),
             &subagents2,
             &HashMap::new(),
-            None,
-            &HashSet::new(),
             &[],
         );
         assert_eq!(pane.entries.len(), 2);
-        assert!(matches!(&pane.entries[1], TaskEntry::Agent { .. }));
+        assert!(matches!(pane_entry(&pane, 1), TaskEntry::Agent { .. }));
     }
 
     #[test]
@@ -2959,8 +2767,6 @@ mod tests {
             &std::collections::BTreeMap::new(),
             &subagents,
             &HashMap::new(),
-            None,
-            &HashSet::new(),
             &[],
         );
 
@@ -2993,8 +2799,8 @@ mod tests {
     #[test]
     fn entry_label_includes_meta() {
         let mut info = make_info();
-        info.persona = Some("researcher".into());
-        info.model = Some("grok-3".into());
+        info.attempt.persona = Some("researcher".into());
+        info.attempt.model = Some("grok-3".into());
         let entry = TaskEntry::from_subagent(&info);
         let label = match &entry {
             TaskEntry::Agent { label, .. } => label.as_str(),
@@ -3024,7 +2830,7 @@ mod tests {
     #[test]
     fn subagent_activity_suffix_renders_while_running_only() {
         let mut info = make_info();
-        info.activity_label = Some("Running: cargo build".into());
+        info.attempt.activity_label = Some("Running: cargo build".into());
         let entry = TaskEntry::from_subagent(&info);
         let (label, styled) = match &entry {
             TaskEntry::Agent { label, styled, .. } => (label, styled),
@@ -3039,7 +2845,7 @@ mod tests {
         );
 
         // Finished rows drop the suffix even if a stale label lingers.
-        info.finished = true;
+        info.set_finished_for_test(true);
         let entry = TaskEntry::from_subagent(&info);
         let styled = match &entry {
             TaskEntry::Agent { styled, .. } => styled,
@@ -3059,13 +2865,15 @@ mod tests {
         let long_desc = "d".repeat(60);
         let mut info = make_info();
         info.description = Arc::from(long_desc.as_str());
-        info.activity_label = Some("Thinking".into());
+        info.attempt.activity_label = Some("Thinking".into());
         let entry = TaskEntry::from_subagent(&info);
         let (label, styled) = match &entry {
             TaskEntry::Agent { label, styled, .. } => (label, styled),
             _ => panic!("expected Agent variant"),
         };
-        let desc = styled.spans[1].content.as_ref();
+        let Some(desc) = styled.spans.get(1).map(|s| s.content.as_ref()) else {
+            panic!("expected description span: {:?}", styled.spans);
+        };
         assert!(
             desc.ends_with('\u{2026}') && desc.chars().count() <= 40,
             "description must be capped when an activity suffix renders: {desc}"
@@ -3076,13 +2884,16 @@ mod tests {
         );
 
         // Without an activity suffix the description renders uncapped.
-        info.activity_label = None;
+        info.attempt.activity_label = None;
         let entry = TaskEntry::from_subagent(&info);
         let styled = match &entry {
             TaskEntry::Agent { styled, .. } => styled,
             _ => panic!("expected Agent variant"),
         };
-        assert_eq!(styled.spans[1].content.as_ref(), long_desc);
+        assert_eq!(
+            styled.spans.get(1).map(|s| s.content.as_ref()),
+            Some(long_desc.as_str())
+        );
     }
 
     fn make_scheduled_info(
@@ -3111,15 +2922,8 @@ mod tests {
             "t1".into(),
             make_scheduled_info("t1", "every 1m", "do x", Some(&next)),
         );
-        pane.sync(
-            &BTreeMap::new(),
-            &HashMap::new(),
-            &scheduled,
-            None,
-            &HashSet::new(),
-            &[],
-        );
-        let label = match &pane.items[0] {
+        pane.sync(&BTreeMap::new(), &HashMap::new(), &scheduled, &[]);
+        let label = match pane_item(&pane, 0) {
             TaskEntry::Scheduled { label, .. } => label,
             _ => panic!("expected Scheduled"),
         };
@@ -3129,29 +2933,35 @@ mod tests {
         );
     }
 
+    /// A fire runs in a detached subagent, so the row reads (running) while that
+    /// subagent is alive — there is no in-session cron turn to match against.
     #[test]
-    fn scheduled_label_shows_running_now_on_cron_match() {
+    fn scheduled_label_shows_running_while_its_subagent_runs() {
         let mut pane = TasksPane::new();
         let mut scheduled = HashMap::new();
-        scheduled.insert(
-            "cron1".into(),
-            make_scheduled_info("cron1", "every 5m", "loop", None),
-        );
+        let mut info = make_scheduled_info("cron1", "every 5m", "loop", None);
+        info.last_subagent_id = Some("sa-1".to_string());
+        scheduled.insert("cron1".into(), info);
+        let mut subagents = HashMap::new();
+        subagents.insert("sa-1".to_string(), make_info());
+
         pane.sync(
             &std::collections::BTreeMap::new(),
-            &HashMap::new(),
+            &subagents,
             &scheduled,
-            Some("cron1"),
-            &HashSet::new(),
             &[],
         );
-        let label = match &pane.items[0] {
-            TaskEntry::Scheduled { label, .. } => label,
-            _ => panic!("expected Scheduled"),
-        };
+        let label = pane
+            .items
+            .iter()
+            .find_map(|item| match item {
+                TaskEntry::Scheduled { label, .. } => Some(label),
+                _ => None,
+            })
+            .expect("scheduled row");
         assert!(
             label.contains("(running)"),
-            "expected (running) when cron matches: {label}"
+            "expected (running) while the fire's subagent runs: {label}"
         );
     }
 
@@ -3163,49 +2973,14 @@ mod tests {
             "provisional-abc".into(),
             make_scheduled_info("provisional-abc", "every 10s", "soon", None),
         );
-        pane.sync(
-            &BTreeMap::new(),
-            &HashMap::new(),
-            &scheduled,
-            None,
-            &HashSet::new(),
-            &[],
-        );
-        let label = match &pane.items[0] {
+        pane.sync(&BTreeMap::new(), &HashMap::new(), &scheduled, &[]);
+        let label = match pane_item(&pane, 0) {
             TaskEntry::Scheduled { label, .. } => label,
             _ => panic!("expected Scheduled"),
         };
         assert!(
             label.contains("(starting)"),
             "expected (starting) for provisional: {label}"
-        );
-    }
-
-    #[test]
-    fn scheduled_queued_shows_queued() {
-        let mut pane = TasksPane::new();
-        let mut scheduled = HashMap::new();
-        scheduled.insert(
-            "q1".into(),
-            make_scheduled_info("q1", "every 5m", "check", None),
-        );
-        let mut queued = HashSet::new();
-        queued.insert("q1");
-        pane.sync(
-            &BTreeMap::new(),
-            &HashMap::new(),
-            &scheduled,
-            None,
-            &queued,
-            &[],
-        );
-        let label = match &pane.items[0] {
-            TaskEntry::Scheduled { label, .. } => label,
-            _ => panic!("expected Scheduled"),
-        };
-        assert!(
-            label.contains("(queued)"),
-            "expected (queued) when task is in pending_prompts: {label}"
         );
     }
 
@@ -3218,15 +2993,8 @@ mod tests {
             "due".into(),
             make_scheduled_info("due", "every 1h", "past", Some(&past)),
         );
-        pane.sync(
-            &BTreeMap::new(),
-            &HashMap::new(),
-            &scheduled,
-            None,
-            &HashSet::new(),
-            &[],
-        );
-        let label = match &pane.items[0] {
+        pane.sync(&BTreeMap::new(), &HashMap::new(), &scheduled, &[]);
+        let label = match pane_item(&pane, 0) {
             TaskEntry::Scheduled { label, .. } => label,
             _ => panic!("expected Scheduled"),
         };
@@ -3245,15 +3013,8 @@ mod tests {
             "uni".into(),
             make_scheduled_info("uni", "every 1s", &unicode_prompt, None),
         );
-        pane.sync(
-            &BTreeMap::new(),
-            &HashMap::new(),
-            &scheduled,
-            None,
-            &HashSet::new(),
-            &[],
-        );
-        let entry = &pane.items[0];
+        pane.sync(&BTreeMap::new(), &HashMap::new(), &scheduled, &[]);
+        let entry = pane_item(&pane, 0);
         let label = match entry {
             TaskEntry::Scheduled { label, .. } => label,
             _ => panic!("expected Scheduled"),
@@ -3273,15 +3034,8 @@ mod tests {
             "bad".into(),
             make_scheduled_info("bad", "every 30s", "fallback", Some("not-a-date")),
         );
-        pane.sync(
-            &BTreeMap::new(),
-            &HashMap::new(),
-            &scheduled,
-            None,
-            &HashSet::new(),
-            &[],
-        );
-        let label = match &pane.items[0] {
+        pane.sync(&BTreeMap::new(), &HashMap::new(), &scheduled, &[]);
+        let label = match pane_item(&pane, 0) {
             TaskEntry::Scheduled { label, .. } => label,
             _ => panic!("expected Scheduled"),
         };
@@ -3303,15 +3057,8 @@ mod tests {
             "unk".into(),
             make_scheduled_info("unk", "unknown schedule", "x", None),
         );
-        pane.sync(
-            &BTreeMap::new(),
-            &HashMap::new(),
-            &scheduled,
-            None,
-            &HashSet::new(),
-            &[],
-        );
-        let label = match &pane.items[0] {
+        pane.sync(&BTreeMap::new(), &HashMap::new(), &scheduled, &[]);
+        let label = match pane_item(&pane, 0) {
             TaskEntry::Scheduled { label, .. } => label,
             _ => panic!("expected Scheduled"),
         };
@@ -3352,14 +3099,7 @@ mod tests {
             make_workflow_run("pii-purge", "active"),
             make_workflow_run("old-scan", "complete"),
         ];
-        pane.sync(
-            &BTreeMap::new(),
-            &HashMap::new(),
-            &HashMap::new(),
-            None,
-            &HashSet::new(),
-            &runs,
-        );
+        pane.sync(&BTreeMap::new(), &HashMap::new(), &HashMap::new(), &runs);
 
         let labels: Vec<&str> = pane.entries.iter().map(|e| e.search_text()).collect();
         assert!(
@@ -3385,18 +3125,11 @@ mod tests {
     fn workflow_children_are_excluded_and_run_counts_once() {
         let mut pane = TasksPane::new();
         let mut child = make_info();
-        child.workflow_run_id = Some(Arc::from("wf_deep-research"));
+        child.attempt.workflow_run_id = Some(Arc::from("wf_deep-research"));
         let mut subagents = HashMap::new();
         subagents.insert("cs-1".to_string(), child);
         let runs = vec![make_workflow_run("deep-research", "active")];
-        pane.sync(
-            &BTreeMap::new(),
-            &subagents,
-            &HashMap::new(),
-            None,
-            &HashSet::new(),
-            &runs,
-        );
+        pane.sync(&BTreeMap::new(), &subagents, &HashMap::new(), &runs);
         assert!(
             pane.items
                 .iter()

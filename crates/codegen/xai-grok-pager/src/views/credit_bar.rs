@@ -89,14 +89,9 @@ fn fmt_dollars(cents: i64) -> String {
     }
 }
 
-/// Build the `/usage` summary block shown in scrollback.
-///
-/// Always shows usage % and (when known) the next reset time.
-/// The credits block is rendered only when the user has a positive prepaid balance:
-/// - no prepaid balance       → credits block omitted entirely
-/// - auto top-up off/unknown  → `Auto topup: disabled` (no max line)
-/// - auto top-up on, no max   → `Auto topup: $N`
-/// - auto top-up on, max set  → `Auto topup: $N` + `Max monthly topup: $M`
+/// Build the `/usage` summary block shown in scrollback. Always shows usage % and (when known) the
+/// next reset time. The credits block is rendered only when the user has a positive prepaid
+/// balance.
 pub fn format_usage_summary(balance: &CreditBalance, autotopup: Option<&AutoTopupInfo>) -> String {
     // Floor to match the backend SpendingLimiter's `as u8` truncation (99.994% renders as 99%, never 100% until truly exhausted)
     let mut lines = vec![format!(
@@ -146,13 +141,9 @@ pub fn format_usage_summary(balance: &CreditBalance, autotopup: Option<&AutoTopu
 const LOW_BALANCE_CENTS: i64 = 1000;
 const PAY_AS_YOU_GO_CRITICAL_CENTS: i64 = 500;
 
-/// The prompt's usage/credits warning as `(text, critical)`, or `None`.
-/// `critical` renders yellow, else grey; team users with `usage_visible = false` never warn.
-/// Behaviour splits by billing model: prepaid credits, pay-as-you-go on-demand, or the included-allowance percentage.
-/// The unit tests pin the exact thresholds and copy.
-///
-/// Gateway light-frontend (`kind: "chat"`) sessions must not show Build coding-credit warnings.
-/// Use [`usage_warning_for_session`] with `gateway_chat = true` so the prompt shows no fake local sampler telemetry.
+/// The prompt's usage/credits warning as `(text, critical)`, or `None`. `critical` renders yellow,
+/// else grey; team users with `usage_visible = false` never warn. Gateway light-frontend (`kind:
+/// "chat"`) sessions must not show Build coding-credit warnings.
 pub fn usage_warning(
     balance: &CreditBalance,
     autotopup: Option<&AutoTopupInfo>,
@@ -228,13 +219,9 @@ pub fn usage_warning_for_session(
     }
 }
 
-/// Build the credit balance indicator as a `Line<'static>`.
-///
-/// Shows `Credits used: XX%` in the status bar.
-///
-/// Gateway light-frontend (`kind: "chat"`) sessions must not show Build coding credits.
-/// Use [`credit_bar_line_for_session`] with `gateway_chat = true`, which returns `None`.
-/// Remote settings or a managed opt-in for chat entry can share the same gate later; for now it only suppresses misleading local telemetry.
+/// Gateway light-frontend (`kind: "chat"`) sessions must not show Build coding credits. Remote
+/// settings or a managed opt-in for chat entry can share the same gate later; for now it only
+/// suppresses misleading local telemetry.
 pub fn credit_bar_line(balance: &CreditBalance, hovered: bool, theme: &Theme) -> Line<'static> {
     credit_bar_line_for_session(balance, hovered, theme, false)
         .expect("non-chat credit_bar_line always renders")
@@ -707,13 +694,22 @@ mod tests {
         let theme = Theme::default();
 
         let low = credit_bar_line(&bal(50.0), false, &theme);
-        assert_eq!(low.spans[0].style.fg, Some(theme.accent_success));
+        assert_eq!(
+            low.spans.first().and_then(|s| s.style.fg),
+            Some(theme.accent_success)
+        );
 
         let high = credit_bar_line(&bal(85.0), false, &theme);
-        assert_eq!(high.spans[0].style.fg, Some(theme.warning));
+        assert_eq!(
+            high.spans.first().and_then(|s| s.style.fg),
+            Some(theme.warning)
+        );
 
         let over = credit_bar_line(&bal(100.0), false, &theme);
-        assert_eq!(over.spans[0].style.fg, Some(theme.accent_error));
+        assert_eq!(
+            over.spans.first().and_then(|s| s.style.fg),
+            Some(theme.accent_error)
+        );
     }
 
     #[test]
@@ -722,7 +718,10 @@ mod tests {
         let line = credit_bar_line(&bal(0.0), false, &theme);
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, "Credits used: 0%");
-        assert_eq!(line.spans[0].style.fg, Some(theme.accent_success));
+        assert_eq!(
+            line.spans.first().and_then(|s| s.style.fg),
+            Some(theme.accent_success)
+        );
     }
 
     #[test]
@@ -730,11 +729,17 @@ mod tests {
         let theme = Theme::default();
         // Exactly 80% renders yellow (warning)
         let at_80 = credit_bar_line(&bal(80.0), false, &theme);
-        assert_eq!(at_80.spans[0].style.fg, Some(theme.warning));
+        assert_eq!(
+            at_80.spans.first().and_then(|s| s.style.fg),
+            Some(theme.warning)
+        );
 
         // Just below 80% renders green (success)
         let below_80 = credit_bar_line(&bal(79.9), false, &theme);
-        assert_eq!(below_80.spans[0].style.fg, Some(theme.accent_success));
+        assert_eq!(
+            below_80.spans.first().and_then(|s| s.style.fg),
+            Some(theme.accent_success)
+        );
     }
 
     #[test]
@@ -742,11 +747,17 @@ mod tests {
         let theme = Theme::default();
         // Exactly 100% renders red (error)
         let at_100 = credit_bar_line(&bal(100.0), false, &theme);
-        assert_eq!(at_100.spans[0].style.fg, Some(theme.accent_error));
+        assert_eq!(
+            at_100.spans.first().and_then(|s| s.style.fg),
+            Some(theme.accent_error)
+        );
 
         // Just below 100% renders yellow (warning)
         let below_100 = credit_bar_line(&bal(99.9), false, &theme);
-        assert_eq!(below_100.spans[0].style.fg, Some(theme.warning));
+        assert_eq!(
+            below_100.spans.first().and_then(|s| s.style.fg),
+            Some(theme.warning)
+        );
     }
 
     #[test]
@@ -755,7 +766,10 @@ mod tests {
         let line = credit_bar_line(&bal(150.0), false, &theme);
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, "Credits used: 150%");
-        assert_eq!(line.spans[0].style.fg, Some(theme.accent_error));
+        assert_eq!(
+            line.spans.first().and_then(|s| s.style.fg),
+            Some(theme.accent_error)
+        );
     }
 
     #[test]

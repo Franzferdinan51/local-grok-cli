@@ -1,4 +1,7 @@
+#![deny(clippy::indexing_slicing)]
+
 pub mod auto_update;
+mod cleanup_downloads;
 pub mod fork_release;
 pub mod local_sync;
 pub mod version;

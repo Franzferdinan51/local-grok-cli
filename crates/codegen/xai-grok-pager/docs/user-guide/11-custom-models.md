@@ -94,6 +94,7 @@ description = "Model description"          # Optional description
 api_key = "sk-..."                        # API key for this provider (optional)
 env_key = "XAI_API_KEY"                   # Env var holding the API key (optional; string or array)
 api_backend = "chat_completions"          # "chat_completions", "responses", or "messages"
+reasoning_summary = "concise"             # Responses API only: "none", "auto", "concise", or "detailed"
 temperature = 0.7                         # Sampling temperature
 top_p = 0.95                              # Nucleus sampling parameter
 max_completion_tokens = 8192              # Maximum tokens per response
@@ -137,12 +138,15 @@ temperature                 = 0.7
 top_p                       = 0.95
 max_completion_tokens       = 8192
 max_retries                 = 8
+rate_limit_retry_threshold  = 4
 inference_idle_timeout_secs = 600
 subagent_rate_limit_max_attempts = 8
 stream_tool_calls           = true
 ```
 
 This is a small, fixed set of environment-wide knobs. Settings that identify a specific model (`model`, `base_url`, `api_key`, `context_window`, ...) cannot be defaulted this way, and a few settings with their own dedicated configuration -- auto-compaction (`[session]`), the system-prompt label (`[agent]`), and reasoning effort (`[models].default_reasoning_effort`) -- keep their existing homes.
+
+`rate_limit_retry_threshold` and `subagent_rate_limit_max_attempts` select different 429 retry paths for subagents. Configuring `rate_limit_retry_threshold` makes the sampler own those retries and disables the separate subagent wait loop, including its 150-second cumulative wait budget and wait telemetry. `subagent_rate_limit_max_attempts` applies only when the sampler threshold is unset.
 
 > **Note on `stream_tool_calls`:** this one affects request *shape*, not just sampling. A few endpoints (some BYOK providers) expect it left unset; if a global `stream_tool_calls = true` causes problems for such a model, opt that model out with `stream_tool_calls = false` in its `[model.<id>]` block.
 
@@ -244,6 +248,27 @@ base_url = "https://api.openai.com/v1"
 name = "GPT-4o (Responses)"
 api_backend = "responses"
 env_key = "OPENAI_API_KEY"
+```
+
+On the Responses API, Grok asks for a `concise` reasoning summary by default; that is what the reasoning text shown in the UI comes from. `reasoning_summary` changes the request: `detailed` or `auto` for a fuller summary, or `none` to omit the field for gateways that reject it.
+
+### AWS Bedrock (Mantle)
+
+Bedrock's OpenAI-compatible gateway rejects `reasoning.summary`, so set `reasoning_summary = "none"`. It authenticates with a Bedrock API key as a bearer token; the example below mints a short-lived one through a named auth provider:
+
+```toml
+[auth_provider.bedrock]
+command = "aws-bedrock-token"   # prints a Bedrock API key on stdout (e.g. via aws-bedrock-token-generator)
+token_ttl_secs = 3600
+
+[model."bedrock-grok-4.6"]
+model = "xai.grok-4.6"
+base_url = "https://bedrock-mantle.us-west-2.api.aws/openai/v1"
+name = "Grok 4.6 (Bedrock)"
+api_backend = "responses"
+reasoning_summary = "none"
+auth_provider = "bedrock"
+context_window = 500000
 ```
 
 ### Ollama (Local Models)

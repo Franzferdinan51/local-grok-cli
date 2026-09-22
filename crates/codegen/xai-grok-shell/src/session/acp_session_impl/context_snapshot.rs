@@ -373,7 +373,8 @@ mod tests {
 
     #[test]
     fn tokenize_uses_baked_product_default_model() {
-        assert_eq!(crate::models::default_model(), "grok-4.6");
+        // GROK_LOCAL: the fork's baked-in product default is the local model.
+        assert_eq!(crate::models::default_model(), "local-model");
     }
 
     #[test]
@@ -421,8 +422,10 @@ mod tests {
             workflows_count: 0,
         };
         let jobs = texts.jobs();
-        assert_eq!(jobs.len(), 1);
-        assert!(matches!(jobs[0].field, TokenizeField::Tools));
+        let [job] = jobs.as_slice() else {
+            panic!("expected one tokenize job");
+        };
+        assert!(matches!(job.field, TokenizeField::Tools));
     }
 
     #[test]

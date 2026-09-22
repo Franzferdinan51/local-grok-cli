@@ -1,3 +1,8 @@
+# Grok Local 0.4.10
+
+- Synced with grok-build 1.0.38 (agent profiles on resume, daemon workflows and memory tools, session directory across machines, plus upstream fixes). LM Studio inference, SearxNG search, `~/.grok-local` isolation, and the `grok-local` binary name are unchanged.
+- Carried uncommitted local work into the sync: cross-host SearxNG tailnet docs and regression coverage, and local catalog wait/refresh handling on auth change.
+
 # Grok Local 0.4.9
 
 - Added `LM_STUDIO_API_KEY` environment variable support for token-protected LM Studio servers. When set, the value is used as the Bearer token for both model discovery and chat completions. When unset or blank, falls back to the default `lm-studio` token for backward compatibility with unprotected instances.

@@ -87,6 +87,8 @@ impl ToolOutput for String {}
 /// Lets `xai_tool_types::TaskOutputOutput` be used directly as a `Tool::Output`
 /// (handy for stub/test tools and pass-through proxies).
 impl ToolOutput for xai_tool_types::TaskOutputOutput {}
+impl ToolOutput for xai_tool_types::GrepSearchOutput {}
+impl ToolOutput for xai_tool_types::WebSearchOutput {}
 
 /// Lets `xai_tool_types::SubagentCompletedOutput` be used directly as a
 /// `Tool::Output` (the `task` tool's structured completion output).
@@ -145,10 +147,22 @@ pub struct ToolChatCompletion {
     /// Code execution result.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code_execution_result: Option<ToolCodeExecutionResult>,
+    /// Where an applied `edit_file` replacement landed; the gix reducer
+    /// lifts it into `ToolResult.edit_file`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edit_file_result: Option<EditFileAnchor>,
     /// Catch-all for additional fields the tool wants to set. Merged
     /// into the proto `ChatCompletion` by the downstream converter.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, Value>,
+}
+
+/// File position of an applied `edit_file` replacement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EditFileAnchor {
+    /// 1-based line of the snippet's first line. Identical before and after
+    /// the edit because a single replacement leaves the prefix untouched.
+    pub start_line: u32,
 }
 
 /// Lightweight code-execution result carried on the completion.

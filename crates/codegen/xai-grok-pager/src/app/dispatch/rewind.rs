@@ -9,13 +9,9 @@ use crate::scrollback::state::ScrollbackState;
 use crate::views::prompt_widget::{PromptWidget, StashedPrompt};
 use crate::views::rewind::{RewindPhase, RewindState};
 
-/// User prompt that participates in the shell's prompt numbering.
 /// Interjections render as user prompts but the shell never numbers them, so counting them would skew the positional prompt-to-entry mapping.
-///
 /// Known approximation: an interjection the shell converted into its own `interject-fallback-` turn IS shell-numbered.
-/// Its live block (rendered from the interjection broadcast) is flagged `is_interjection` and carries no index.
 /// The positional fallback thus under-counts around it until a resume replays it as an indexed prompt.
-/// The primary path (explicit `prompt_index` matches) is unaffected.
 fn is_indexed_user_prompt(block: &RenderBlock) -> bool {
     matches!(block, RenderBlock::UserPrompt(b) if !b.is_interjection)
 }
@@ -476,7 +472,7 @@ pub(super) fn dispatch_rewind_success(
             agent.prompt.restore(draft);
         }
     } else if let Some(ref prompt_text) = response.prompt_text {
-        agent.prompt.set_text(prompt_text);
+        agent.prompt.set_text_discarding_images(prompt_text);
     } else if let Some(draft) = stashed_draft {
         agent.prompt.restore(draft);
     }

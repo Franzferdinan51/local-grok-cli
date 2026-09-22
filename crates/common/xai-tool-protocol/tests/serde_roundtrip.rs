@@ -469,6 +469,7 @@ fn method_serialises_with_dot_notation_for_dotted_methods() {
         (Method::ToolsSearch, "tools.search"),
         (Method::SessionOpen, "session_open"),
         (Method::SessionClose, "session_close"),
+        (Method::SessionDetach, "session_detach"),
         (Method::SessionBindServer, "session_bind_server"),
         (Method::SessionUnbindServer, "session_unbind_server"),
         (Method::SubscribeNotifications, "subscribe_notifications"),
@@ -487,6 +488,7 @@ fn method_serialises_with_dot_notation_for_dotted_methods() {
         (Method::BotVncDescriptor, "bot.vncDescriptor"),
         (Method::BotTranscriptOffbox, "bot.transcript.offbox"),
         (Method::BotBindConversation, "bot.bindConversation"),
+        (Method::BotPresence, "bot.presence"),
         (Method::BotEvent, "bot.event"),
     ];
     for (m, expected) in cases {

@@ -2,6 +2,8 @@
 //!
 //! This crate provides the common logic used by `xai-grok-shell` and `xai-grok-pager` for handling announcements (banner notifications).
 
+#![deny(clippy::indexing_slicing)]
+
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
@@ -86,8 +88,7 @@ pub fn announcement_hide_key(a: &RemoteAnnouncement) -> String {
 
 /// Parse persisted hidden state into a set of hidden announcement ids.
 /// Unknown fields are tolerated; malformed input yields an empty set.
-/// The legacy `{"hidden": bool}` shape carries no ids to migrate, so it decays to empty.
-/// The banner re-shows once and the next hide re-persists per-ID.
+/// The legacy `{"hidden": bool}` shape carries no ids, so it decays to empty and the banner re-shows once.
 pub fn parse_hidden_announcement_ids(s: &str) -> BTreeSet<String> {
     #[derive(Deserialize)]
     struct State {
@@ -216,9 +217,8 @@ mod bindings_export {
     use super::*;
     use ts_rs::TS;
 
-    /// Explicitly (re)generate every binding (the export-test pattern).
-    /// ts-rs also emits a hidden per-type test from `#[ts(export)]`.
-    /// This is the single entry point `generate.sh` drives, failing loudly if any type can't export.
+    /// Explicitly regenerate every binding (the export-test pattern).
+    /// Single entry point `generate.sh` drives; fails loudly if any type cannot export.
     /// Bindings land in `TS_RS_EXPORT_DIR` (default `bindings/`).
     #[test]
     fn export_all_bindings() {
@@ -282,7 +282,10 @@ mod tests {
         }
         let result = resolve_startup(None);
         assert!(result.is_some());
-        assert_eq!(result.unwrap()[0].id.as_deref(), Some("test"));
+        assert_eq!(
+            result.unwrap().first().and_then(|a| a.id.as_deref()),
+            Some("test")
+        );
         // SAFETY: test-only
         unsafe {
             std::env::remove_var("GROK_ANNOUNCEMENTS_OVERRIDE");
@@ -362,10 +365,13 @@ mod tests {
                 ..Default::default()
             },
         ];
+        let Some(second) = active.get(1) else {
+            panic!("expected two announcements: {active:?}");
+        };
         let mut ids: BTreeSet<String> = [
             "live".to_string(),
             "gone".to_string(),
-            announcement_hide_key(&active[1]),
+            announcement_hide_key(second),
         ]
         .into_iter()
         .collect();
@@ -373,7 +379,7 @@ mod tests {
         assert!(prune_hidden_announcement_ids(&mut ids, &active));
         assert_eq!(ids.len(), 2);
         assert!(ids.contains("live"));
-        assert!(ids.contains(&announcement_hide_key(&active[1])));
+        assert!(ids.contains(&announcement_hide_key(second)));
 
         // Second prune with the same list is a no-op.
         assert!(!prune_hidden_announcement_ids(&mut ids, &active));

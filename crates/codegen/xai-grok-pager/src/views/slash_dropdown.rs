@@ -51,44 +51,18 @@ fn tag_suffix_width(row: &SuggestionRow) -> usize {
     row.tag.as_ref().map(|t| t.width() + 3).unwrap_or(0)
 }
 
-/// Compute the aligned label column width from all visible items.
-///
-/// The label column gets up to 60% of the available width (capped at `LABEL_CAP`), prioritising the full command name over the description.
-/// The tag suffix is folded in so a `/cmd [tag]` row and a plain `/cmd` row share the same description column.
+/// Clamped name+tag per row, then the 60% budget. A short sibling cannot collapse an overlong name.
 fn compute_label_column_w(items: &[SuggestionRow], content_w: usize) -> usize {
     let budget = (content_w * 3 / 5).min(LABEL_CAP);
-    let preferred = items
+    items
         .iter()
-        .filter_map(|r| {
-            let base = r.display.width();
-            if r.tag.is_none() {
-                (base <= LABEL_CAP).then_some(base)
-            } else {
-                Some((base + tag_suffix_width(r)).min(LABEL_CAP))
-            }
-        })
+        .map(|r| (r.display.width() + tag_suffix_width(r)).min(LABEL_CAP))
         .max()
-        .unwrap_or(0);
-    // Without a fallback a lone overlong name zeros the column.
-    let candidate = if preferred > 0 {
-        preferred
-    } else {
-        items
-            .iter()
-            .map(|r| (r.display.width() + tag_suffix_width(r)).min(LABEL_CAP))
-            .max()
-            .unwrap_or(0)
-    };
-    candidate.min(budget)
+        .unwrap_or(0)
+        .min(budget)
 }
 
 /// Build a flat list of styled lines for all visible items.
-///
-/// Each item produces one or more lines: the first has the prefix, label, and first description line.
-/// Continuation lines are indented to the description column.
-/// This is the same approach as `question_view::build_flat_option_lines`.
-///
-/// Returns `(flat_lines, item_first_line_indices)`: each entry in the second vec is the flat-line index where item `i` starts, for scroll targeting.
 fn build_flat_lines(
     items: &[SuggestionRow],
     selected: usize,
@@ -113,6 +87,7 @@ fn build_flat_lines(
             None => theme.bg_light,
         };
 
+        let start = flat.len();
         build_item_lines(
             &mut flat,
             item,
@@ -122,20 +97,32 @@ fn build_flat_lines(
             row_bg,
             theme,
         );
+        // Terminal theme (Reset bands): reverse video via the line style;
+        // no-op on RGB themes (band bg already baked).
+        if crate::views::modal_window::embedded_row_style(theme, is_selected).is_none() {
+            let overlay = if is_selected {
+                Some(theme.selection_overlay())
+            } else if is_hovered {
+                Some(theme.hover_overlay())
+            } else {
+                None
+            };
+            if let Some(ov) = overlay {
+                let Some(tail) = flat.get_mut(start..) else {
+                    continue;
+                };
+                for line in tail {
+                    line.style = line.style.patch(ov);
+                }
+            }
+        }
     }
 
     (flat, starts)
 }
 
-/// Render the slash dropdown items into the given area.
-///
-/// This renders only the result rows (no borders or separators).
-/// Panel chrome (clear, borders, count hint) is handled by the caller (AgentView); `area` covers just the item rows.
-///
-/// `hovered` is the absolute item index currently under the mouse (`None` if no hover); it drives the blended hover highlight like file-search.
-///
-/// Returns the mapping from visible row to item for mouse hit-testing.
-/// Once a description wraps, rows and items diverge, so callers must not use row arithmetic.
+/// This renders only the result rows (no borders or separators). Once a description wraps, rows and
+/// items diverge, so callers must not use row arithmetic.
 pub fn render_dropdown(
     buf: &mut Buffer,
     area: Rect,
@@ -192,12 +179,13 @@ pub fn render_dropdown(
                 .saturating_sub(1),
         );
         let y = area.y + vis_row as u16;
-        let line = &flat_lines[line_idx];
+        let Some(line) = flat_lines.get(line_idx) else {
+            break;
+        };
         // Skip rows that fall outside the buffer (resize race).
         if y < buf.area.y || y >= buf.area.bottom() || area.x >= buf.area.right() {
             continue;
         }
-        let row_bg = line.style.bg.unwrap_or(theme.bg_light);
         let clamped_w = row_w.min(buf.area.right().saturating_sub(area.x) as usize) as u16;
         let clamped = Rect {
             x: area.x,
@@ -205,7 +193,11 @@ pub fn render_dropdown(
             width: clamped_w,
             height: 1,
         };
-        buf.set_style(clamped, Style::default().bg(row_bg));
+        let mut row_style = line.style;
+        if row_style.bg.is_none() {
+            row_style = row_style.bg(theme.bg_light);
+        }
+        buf.set_style(clamped, row_style);
         buf.set_line_safe(area.x, y, line, row_w as u16);
     }
 
@@ -295,12 +287,9 @@ fn flat_line_count(items: &[SuggestionRow], row_w: usize, cap: usize) -> usize {
     lines
 }
 
-/// Build lines for a single dropdown item and append them to `out`.
-///
-/// Layout (same as question view):
-/// - First line:  `❯ /command-name  First line of description`
-/// - Continuation: `                 Wrapped description text`
-///   ^indent aligned to description column
+/// Build lines for a single dropdown item and append them to `out`. Layout (same as question view).
+/// First line: `❯ /command-name First line of description`. Continuation: ` Wrapped description
+/// text`. ^indent aligned to description column.
 #[allow(clippy::too_many_arguments)]
 fn build_item_lines(
     out: &mut Vec<Line<'static>>,
@@ -320,13 +309,17 @@ fn build_item_lines(
     let embed = crate::views::modal_window::embedded_row_style(theme, is_selected);
     let primary_fg = embed.map_or(theme.text_primary, |e| e.fg(theme.text_primary));
     let match_fg = embed.map_or(theme.fuzzy_accent, |e| e.fg(theme.fuzzy_accent));
-    let desc_fg = embed.map_or(theme.gray, |e| e.fg(theme.gray));
     let normal_style = Style::default()
         .fg(primary_fg)
         .bg(row_bg)
         .add_modifier(bold);
     let match_style = Style::default().fg(match_fg).bg(row_bg).add_modifier(bold);
-    let desc_style = Style::default().fg(desc_fg).bg(row_bg);
+    // muted(): DIM on the terminal theme, where `gray` is Reset and the
+    // description would render as heavy as the label.
+    let desc_style = match embed {
+        Some(e) => Style::default().fg(e.fg(theme.gray)).bg(row_bg),
+        None => theme.muted().bg(row_bg),
+    };
     let bg_style = Style::default().bg(row_bg);
     let tag_style = Style::default().fg(theme.accent_system).bg(row_bg);
 
@@ -401,10 +394,9 @@ fn build_item_lines(
     }
 }
 
-/// Build spans for a text string with fuzzy match character highlighting.
-///
-/// Characters at positions listed in `indices` get `match_style` (accent color), all others get `normal_style`.
-/// Adjacent characters with the same style are coalesced into a single `Span` to keep the span count low.
+/// Build spans for a text string with fuzzy match character highlighting. Characters at positions
+/// listed in `indices` get `match_style` (accent color), all others get `normal_style`. Adjacent
+/// characters with the same style are coalesced into a single `Span` to keep the span count low.
 fn build_highlighted_spans(
     text: &str,
     indices: &[u32],
@@ -566,9 +558,12 @@ mod tests {
         let normal = Style::default().fg(theme.text_primary);
         let matched = Style::default().fg(theme.fuzzy_accent);
         let spans = build_highlighted_spans("ssh-wrap", &[0, 1, 2], normal, matched);
-        assert_eq!(spans[0].content.as_ref(), "ssh");
-        assert_eq!(spans[0].style.fg, Some(theme.fuzzy_accent));
-        assert_eq!(spans[1].style.fg, Some(theme.text_primary));
+        let [ssh, rest, ..] = spans.as_slice() else {
+            panic!("expected two spans: {spans:?}");
+        };
+        assert_eq!(ssh.content.as_ref(), "ssh");
+        assert_eq!(ssh.style.fg, Some(theme.fuzzy_accent));
+        assert_eq!(rest.style.fg, Some(theme.text_primary));
     }
 
     #[test]
@@ -607,8 +602,12 @@ mod tests {
         let mut buf = Buffer::empty(area);
         render_dropdown(&mut buf, area, &snap, None, &theme);
 
-        let line0: String = (0..80).map(|x| buf[(x, 0)].symbol().to_string()).collect();
-        let line1: String = (0..80).map(|x| buf[(x, 1)].symbol().to_string()).collect();
+        let line0: String = (0..80)
+            .filter_map(|x| buf.cell((x, 0)).map(|c| c.symbol().to_string()))
+            .collect();
+        let line1: String = (0..80)
+            .filter_map(|x| buf.cell((x, 1)).map(|c| c.symbol().to_string()))
+            .collect();
         assert!(line0.contains("Log in or re-authenticate"));
         assert!(line1.contains("Acme account login"));
         assert!(!line0.contains(" · built-in"));
@@ -723,7 +722,12 @@ mod tests {
         );
         assert!(!rendered.has_scrollbar, "content fits; no scrollbar");
         // Rows are monotone and grouped: item 1 starts after item 0's lines.
-        assert!(rendered.row_items.windows(2).all(|w| w[0] <= w[1]));
+        assert!(
+            rendered
+                .row_items
+                .windows(2)
+                .all(|w| matches!(w, [a, b] if a <= b))
+        );
     }
 
     /// Scrollbar and row map when content exceeds the capped height.
@@ -751,7 +755,11 @@ mod tests {
         let rendered = render_dropdown(&mut buf, area, &snap, None, &theme);
         assert!(rendered.has_scrollbar, "overflowing lines need a scrollbar");
         assert_eq!(rendered.row_items.len(), rows as usize);
-        assert_eq!(rendered.row_items[0], 0, "scroll starts at the top");
+        assert_eq!(
+            rendered.row_items.first().copied(),
+            Some(0),
+            "scroll starts at the top"
+        );
     }
 
     /// A tagged row renders "[tag]" (system-accent) between the command name and the description; untagged rows and arg rows render no bracket.
@@ -889,7 +897,9 @@ mod tests {
         let mut buf = Buffer::empty(area);
         render_dropdown(&mut buf, area, &snap, None, &theme);
 
-        let line0: String = (0..80).map(|x| buf[(x, 0)].symbol().to_string()).collect();
+        let line0: String = (0..80)
+            .filter_map(|x| buf.cell((x, 0)).map(|c| c.symbol().to_string()))
+            .collect();
         let ellipsized = "/principles-redesign-from-first-princip\u{2026}";
         assert!(
             line0.contains(ellipsized),
@@ -902,16 +912,17 @@ mod tests {
     }
 
     #[test]
-    fn overlong_untagged_does_not_widen_column_beside_short_name() {
+    fn mixed_short_and_overlong_keeps_long_names_readable() {
         use ratatui::buffer::Buffer;
         use ratatui::layout::Rect;
 
         let theme = Theme::default();
+        let short = "/cache";
         let long_display = "/principles-redesign-from-first-principles";
         let width: u16 = 80;
         let snap = SlashSnapshot {
             open: true,
-            matches: vec![row("/cache", "cache help"), row(long_display, "long name")],
+            matches: vec![row(short, "cache help"), row(long_display, "long name")],
             selected: 0,
             ..Default::default()
         };
@@ -939,37 +950,17 @@ mod tests {
                 .unwrap_or_else(|| panic!("row {y} missing {needle:?}: {}", row_text(y)))
         };
 
-        let short_desc_x = desc_col(0, "cache help");
-        let long_desc_x = desc_col(1, "long name");
-        assert_eq!(
-            short_desc_x,
-            long_desc_x,
-            "shared column (row0={}, row1={})",
-            row_text(0),
+        assert!(row_text(0).contains(short), "{}", row_text(0));
+        assert!(
+            row_text(1).contains("/principles-redesign-from-first-princip\u{2026}"),
+            "{}",
             row_text(1)
         );
-        assert_eq!(
-            short_desc_x,
-            9,
-            "short name must set the column, not a 40-col pad: {}",
-            row_text(0)
-        );
+        assert!(!row_text(1).contains(long_display), "{}", row_text(1));
 
-        let truncated_to_short = "/prin\u{2026}";
-        assert!(
-            row_text(1).contains(truncated_to_short),
-            "long name must truncate to the short column: {}",
-            row_text(1)
-        );
-        assert!(
-            !row_text(1).contains(long_display),
-            "full 42-col name must not render: {}",
-            row_text(1)
-        );
-        assert!(
-            !row_text(1).contains("/principles-redesign-from-first-princip\u{2026}"),
-            "long name must not get a 40-col label: {}",
-            row_text(1)
-        );
+        // First-line gap is one column, not LABEL_DESC_GAP.
+        let desc_x = (PREFIX_W + LABEL_CAP + 1) as u16;
+        assert_eq!(desc_col(0, "cache help"), desc_x, "{}", row_text(0));
+        assert_eq!(desc_col(1, "long name"), desc_x, "{}", row_text(1));
     }
 }

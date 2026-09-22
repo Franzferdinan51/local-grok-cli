@@ -33,8 +33,14 @@ Inference defaults to **LM Studio** at `http://127.0.0.1:1234/v1`. The model
 picker lists chat models LM Studio exposes (`GET /api/v0/models`, then
 `/v1/models`): loaded llms/vlms first, then the rest of the downloaded library.
 Embeddings stay hidden. Set `LM_STUDIO_MODEL` to pick one by id. Web search
-defaults to SearxNG at `http://127.0.0.1:8888` (`SEARXNG_URL`; a trailing
-`/search` is stripped). Do not point this at Open WebUI on `:8080`.
+defaults to SearxNG at `http://127.0.0.1:8888` (`SEARXNG_URL` or
+`GROK_SEARXNG_URL`; a trailing `/search` is stripped). Do not point this at
+Open WebUI on `:8080`. To reach a SearxNG server on another machine on your
+tailnet:
+
+```sh
+export SEARXNG_URL=https://your-tailnet-host.ts.net/searxng
+```
 
 If your LM Studio server requires authentication, set the `LM_STUDIO_API_KEY`
 environment variable to your Bearer token. This is only needed when your
@@ -52,8 +58,8 @@ version and the grok-build version that overlay was applied on.
 
 ```sh
 grok-local --version
-# grok-local 0.4.1 (<git sha>)
-# grok-build 1.0.16 (<SOURCE_REV>)
+# grok-local 0.4.10 (<git sha>)
+# grok-build 1.0.38 (<SOURCE_REV>)
 ```
 
 Two update paths — official `grok` from x.ai is never installed:
@@ -170,7 +176,7 @@ MCP servers, skills, plugins, hooks, headless mode, sandboxing, and more.
 
 | Path | Contents |
 |------|----------|
-| `crates/codegen/xai-grok-pager-bin` | Composition-root package; builds the `xai-grok-pager` binary |
+| `crates/codegen/xai-grok-pager-bin` | Composition-root package; builds the `grok-local` binary |
 | `crates/codegen/xai-grok-pager` | The TUI: scrollback, prompt, modals, rendering |
 | `crates/codegen/xai-grok-shell` | Agent runtime + leader/stdio/headless entry points |
 | `crates/codegen/xai-grok-tools` | Tool implementations (terminal, file edit, search, ...) |
@@ -192,6 +198,15 @@ cargo test -p xai-grok-config # per-crate tests
 cargo clippy -p <crate>       # lint config: clippy.toml at the repo root
 cargo fmt --all               # rustfmt.toml at the repo root
 ```
+
+> [!NOTE]
+> The `xai-grok-shell` turn-loop/retry tests run under a paused Tokio clock
+> and need headroom above the fork's 2s local connect timeout (see
+> `GROK_CONNECT_TIMEOUT_SECS` in `xai-grok-sampler`):
+>
+> ```sh
+> GROK_CONNECT_TIMEOUT_SECS=10 cargo test -p xai-grok-shell --features test-support
+> ```
 
 ## Contributing
 

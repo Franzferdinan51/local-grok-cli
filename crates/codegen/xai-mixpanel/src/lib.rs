@@ -5,6 +5,8 @@
 //!
 //! Only the `track` API is implemented since that's all we use.
 
+#![deny(clippy::indexing_slicing)]
+
 use base64::Engine;
 use std::collections::HashMap;
 
@@ -122,10 +124,9 @@ impl Mixpanel {
 mod tests {
     use super::*;
 
-    /// Project token is deliberately Bearer-shaped: it would be redacted
-    /// if `prepare_properties` ran the scrubber after token injection.
-    /// The `error` value catches the inverse regression: if the scrub
-    /// loop is dropped, the user-supplied Bearer leaks.
+    /// Project token is deliberately Bearer-shaped: it would be redacted if `prepare_properties` ran the scrubber after token
+    /// injection. The `error` value catches the inverse regression: if the scrub loop is dropped, the user-supplied Bearer
+    /// leaks.
     #[test]
     fn prepare_properties_scrubs_then_injects_token() {
         let project_token = "Bearer fake-project-token-abcdef0123456789";
@@ -136,8 +137,14 @@ mod tests {
 
         let prepared = mp.prepare_properties(props);
 
-        assert_eq!(prepared["token"], project_token, "project token redacted");
-        let error = prepared["error"].as_str().unwrap();
+        assert_eq!(
+            prepared.get("token"),
+            Some(&serde_json::json!(project_token)),
+            "project token redacted"
+        );
+        let Some(error) = prepared.get("error").and_then(|v| v.as_str()) else {
+            panic!("missing json key error: {prepared:?}");
+        };
         assert!(
             !error.contains("abcdef0123456789abcdef"),
             "secret leaked: {error}"

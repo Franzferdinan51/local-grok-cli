@@ -20,6 +20,7 @@ tokio = { workspace = true, features = ["fs", "process", "io-util", "macros", "t
 tracing = { workspace = true }
 url = { workspace = true }
 xai-dirs = { workspace = true }
+xai-grok-login = { workspace = true }
 xai-grok-shell = { workspace = true }
 xai-grok-telemetry = { workspace = true }
 xai-grok-tools = { workspace = true }
@@ -28,6 +29,10 @@ flate2 = { workspace = true }
 zstd = { workspace = true }
 fs2 = { workspace = true }
 sha2 = { workspace = true }
+xai-tty-utils = { workspace = true }
+# MinGit archive extraction. Not `workspace = true`: the workspace pin has
+# default features on (aes/bzip2/lzma/zstd); MinGit entries are only deflated.
+zip = { version = "3", default-features = false, features = ["deflate-flate2"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = { workspace = true }

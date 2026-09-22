@@ -13,6 +13,8 @@ use url::Url;
 const SEARXNG_URL_ENV: &[&str] = &["SEARXNG_URL", "GROK_SEARXNG_URL"];
 
 /// Default local SearxNG origin (JSON at `{origin}/search?format=json`).
+/// Cross-host: on macOS, 127.0.0.1:8888 is Batman's SearxNG reachable via
+/// tailnet (set `SEARXNG_URL` or `GROK_SEARXNG_URL` env to the tailnet URL).
 pub const DEFAULT_SEARXNG_URL: &str = "http://127.0.0.1:8888";
 
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(8);
@@ -172,6 +174,8 @@ mod tests {
 
     #[test]
     fn default_url_is_localhost_searxng() {
+        // Batman runs SearxNG on port 8888; macOS can reach it via tailnet.
+        // Use SEARXNG_URL env to override for other hosts.
         assert_eq!(DEFAULT_SEARXNG_URL, "http://127.0.0.1:8888");
     }
 
@@ -194,6 +198,28 @@ mod tests {
         assert!(is_searxng_endpoint("http://127.0.0.1:8080", "anything"));
         assert!(is_searxng_endpoint("http://searxng:8080", "web"));
         assert!(!is_searxng_endpoint("https://api.x.ai/v1", "grok-4"));
+    }
+
+    /// SearxNG model name is authoritative — a remote tailnet or corporate SearxNG
+    /// host must route to the SearxNG path even when the URL is not localhost.
+    /// Regression test for cross-host SearXNG deployments (e.g. Batman tailnet).
+    #[test]
+    fn searxng_model_name_trumps_non_localhost_url() {
+        // Remote tailnet host: model="searxng" must route to SearxNG path, not xAI.
+        assert!(
+            is_searxng_endpoint("http://batman.tailnet:8888", "searxng"),
+            "model=searxng on a remote tailnet URL must be detected as SearxNG"
+        );
+        // Internal corporate/custom hostname also covered by explicit model name.
+        assert!(
+            is_searxng_endpoint("http://searxng.internal.corp:8080", "searxng"),
+            "model=searxng on a custom hostname must be detected as SearxNG"
+        );
+        // But model != "searxng" on a non-matching URL is NOT a SearxNG endpoint.
+        assert!(
+            !is_searxng_endpoint("http://batman.tailnet:8888", "grok-3"),
+            "non-searxng model on remote URL should not be a SearxNG endpoint"
+        );
     }
 
     #[test]

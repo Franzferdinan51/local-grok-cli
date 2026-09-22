@@ -247,19 +247,7 @@ fn format_item_summary(items: &[ImportableItem]) -> String {
 }
 
 /// Parse Claude `hooks` JSON from a settings file at `path` into `ImportableItem::Hook` items.
-///
-/// Claude `hooks` shape:
-/// ```json
-/// {
-///   "hooks": {
-///     "PreToolUse": [
-///       { "matcher": "Bash", "hooks": [{ "type": "command", "command": "echo x", "timeout": 5 }] }
-///     ]
-///   }
-/// }
-/// ```
-///
-/// Each command handler becomes one `ImportableItem::Hook`.
+/// Claude `hooks` shape: Each command handler becomes one `ImportableItem::Hook`.
 /// HTTP handlers and other types are skipped (we only import shell commands).
 fn extract_hooks_from_settings_file(path: &Path) -> Vec<ImportableItem> {
     let content = match std::fs::read_to_string(path) {
@@ -317,13 +305,8 @@ fn extract_hooks_from_settings_file(path: &Path) -> Vec<ImportableItem> {
 
 // Scanner
 
-/// Scan all Claude settings sources and build an import plan.
-///
-/// Discovers:
-/// - Permission rules from `.claude/settings*.json` (global and project)
-/// - Environment variables from `.claude/settings*.json`
-/// - MCP servers from `~/.claude.json` (global and per-project)
-/// - MCP servers from `.mcp.json` files (project)
+/// Scan all Claude settings sources and build an import plan. Discovers: Permission rules from `.claude/settings*.json` (global and project) Environment variables from `.claude/settings*.json`
+/// MCP servers from `~/.claude.json` (global and per-project) MCP servers from `.mcp.json` files (project)
 pub fn scan_importable_settings(cwd: &Path) -> ImportPlan {
     let mut plan = ImportPlan::default();
 
@@ -473,9 +456,7 @@ fn scan_mcp_json_servers(cwd: &Path, plan: &mut ImportPlan) {
 // Repo Root Discovery
 
 /// Find the git repo root for project config writes.
-///
-/// Uses `git2::Repository::discover` (matching `config/mod.rs:find_project_configs`)
-/// to find the repo root. Falls back to `cwd` if no git repo is found.
+/// Uses `git2::Repository::discover` (matching `config/mod.rs:find_project_configs`) to find the repo root. Falls back to `cwd` if no git repo is found.
 pub fn find_project_root(cwd: &Path) -> PathBuf {
     git2::Repository::discover(cwd)
         .ok()
@@ -483,33 +464,17 @@ pub fn find_project_root(cwd: &Path) -> PathBuf {
         .unwrap_or_else(|| cwd.to_path_buf())
 }
 
-// Import Marker (Read Side)
-//
-// The marker `[claude_compat] imported = true` in `~/.grok/config.toml` is
-// the signal that runtime fallback paths should stop reading `.claude/`.
-// The reader lives here so the hook, path, and permission gates all consult the same cached marker
-// The writer is `mark_claude_imported` below
+// Import Marker (Read Side) The marker `[claude_compat] imported = true` in `~/.grok/config.toml` is the signal that runtime fallback paths should stop reading `.claude/`.
+// The reader lives here so the hook, path, and permission gates all consult the same cached marker The writer is `mark_claude_imported` below
 
 /// Cached result of [`is_claude_import_marked`]; see its doc for the caching rationale and trade-offs.
 /// `RwLock<Option<bool>>` rather than `OnceLock<bool>` so tests can reset the state between cases.
 /// The fast path is a read lock and a cached `bool`, far below the cost of the uncached `read_to_string` and TOML parse.
 static MARKER_CACHE: std::sync::RwLock<Option<bool>> = std::sync::RwLock::new(None);
 
-/// Whether the current user has already imported Claude settings.
-///
-/// Reads `[claude_compat] imported = true` from `~/.grok/config.toml` once
-/// per process and caches the result.
-/// When the marker is set, runtime fallbacks that read `.claude/` should be skipped; the user has migrated to native config.
-///
-/// Resilient: returns `false` on missing file, missing section, parse error, or any other failure.
-///
-/// Caching avoids a `read_to_string` and TOML parse on every gated call (`load_claude_env_with_project`, MCP loaders, hook discovery, etc.).
-/// Trade-off: a user who manually flips the marker mid-session must restart to see the change, acceptable because reverting after import is rare.
-/// Use [`is_claude_import_marked_at`] in tests, which bypasses the cache.
-///
-/// Prefer [`is_claude_import_marked_with_log`] for runtime compat gates that change behavior based on the marker.
-/// That variant logs one line so users can see the cutoff fired.
-/// Use the bare version for read-time display logic that already has its own path (e.g. UI listings in `extensions/skills.rs` and `inspect.rs`).
+/// Whether the current user has already imported Claude settings. Reads `[claude_compat] imported = true` from `~/.grok/config.toml` once per process and caches the result.
+/// When the marker is set, runtime fallbacks that read `.claude/` should be skipped; the user has migrated to native config. Resilient: returns `false` on missing file, missing section, parse error, or any other failure.
+/// Trade-off: a user who manually flips the marker mid-session must restart to see the change, acceptable because reverting after import is rare. That variant logs one line so users can see the cutoff fired.
 pub(crate) fn is_claude_import_marked() -> bool {
     if let Some(v) = *MARKER_CACHE.read().expect("MARKER_CACHE poisoned") {
         return v;
@@ -567,7 +532,6 @@ pub(crate) fn is_claude_import_marked_at(config_path: &Path) -> bool {
 }
 
 /// Write `[claude_compat] imported = true` to `~/.grok/config.toml`.
-///
 /// Uses the same atomic write pattern as `save_mcp_server_config` (write to `.tmp`, then rename).
 /// Creates the file and parent directory if missing. Existing content in the file is preserved.
 fn write_import_marker(config_path: &Path) -> anyhow::Result<()> {
@@ -627,13 +591,9 @@ pub fn mark_claude_imported() -> anyhow::Result<()> {
 }
 // TOML Patch Writer
 
-/// Apply an import plan by writing TOML patches to the appropriate config files.
-///
-/// This is additive-only: existing entries are never removed.
+/// Apply an import plan by writing TOML patches to the appropriate config files. This is additive-only: existing entries are never removed.
 /// New permission rules are appended; new env vars and MCP servers are added without overwriting existing keys or names.
-///
-/// Project items are written to `<repo_root>/.grok/config.toml` (discovered via `git2::Repository::discover`), not `cwd/.grok/config.toml`.
-/// This avoids creating config files in unexpected subdirectories.
+/// Project items are written to `<repo_root>/.grok/config.toml` (discovered via `git2::Repository::discover`), not `cwd/.grok/config.toml`. This avoids creating config files in unexpected subdirectories.
 pub fn apply_import(plan: &ImportPlan, cwd: &Path) -> anyhow::Result<ImportResult> {
     let mut result = ImportResult::default();
 
@@ -853,12 +813,7 @@ fn merge_permissions(
 }
 
 /// Format a `PermissionRule` back to the compact Claude-style string.
-///
-/// Examples:
-///   - `"Bash(npm run build)"` for `{ Allow, Bash, "npm run build" }`
-///   - `"Read(src/*.rs)"` for `{ Allow, Read, "src/*.rs" }`
-///   - `"Bash"` for `{ Allow, Bash, None }` (bare tool name, any pattern)
-///   - `"*"` for `{ Allow, Any, None }` (catch-all rule)
+/// Examples: `"Bash(npm run build)"` for `{ Allow, Bash, "npm run build" }` `"Read(src/*.rs)"` for `{ Allow, Read, "src/*.rs" }` `"Bash"` for `{ Allow, Bash, None }` (bare tool name, any pattern) `"*"` for `{ Allow, Any, None }` (catch-all rule)
 fn format_rule_string(rule: &PermissionRule) -> String {
     let tool_name = match rule.tool {
         ToolFilter::Any => "",
@@ -972,13 +927,8 @@ fn merge_paths(
     Ok(count)
 }
 
-/// Merge `Hook` items into `<hooks_dir>/imported-from-claude.json`.
-///
-/// The output JSON is the same shape that `xai-grok-hooks` natively understands (Claude-compatible).
-/// The native hooks loader scans `.grok/hooks/*.json` directly, so no separate config-side parser is required.
-/// Existing entries with the same `(event, matcher, command)` triple are deduped.
-///
-/// Returns the number of newly added hook entries.
+/// Merge `Hook` items into `<hooks_dir>/imported-from-claude.json`. The output JSON is the same shape that `xai-grok-hooks` natively understands (Claude-compatible).
+/// The native hooks loader scans `.grok/hooks/*.json` directly, so no separate config-side parser is required. Existing entries with the same `(event, matcher, command)` triple are deduped.
 fn apply_hooks_to_dir(hooks_dir: &Path, items: &[ImportableItem]) -> anyhow::Result<usize> {
     let new_hooks: Vec<&ImportableItem> = items
         .iter()
@@ -1036,11 +986,8 @@ fn apply_hooks_to_dir(hooks_dir: &Path, items: &[ImportableItem]) -> anyhow::Res
                 anyhow::anyhow!("{}: hooks.{} is not a JSON array", target.display(), event)
             })?;
 
-        // Dedup on `(event, matcher, command)`
-        // If a matching entry already exists, update its `timeout` in place and skip adding a new group; otherwise append a new group below
-        // A re-import with a changed timeout therefore reflects in the output
-        //
-        // Invariant: `extract_hooks_from_settings_file` filters empty matcher strings to `None`, so the comparison only distinguishes `None` from `Some(s)`
+        // Dedup on `(event, matcher, command)` If a matching entry already exists, update its `timeout` in place and skip adding a new group; otherwise append a new group below
+        // A re-import with a changed timeout therefore reflects in the output Invariant: `extract_hooks_from_settings_file` filters empty matcher strings to `None`, so the comparison only distinguishes `None` from `Some(s)`
         let mut updated = false;
         for g in groups.iter_mut() {
             let existing_matcher = g.get("matcher").and_then(|v| v.as_str());
@@ -1133,6 +1080,18 @@ fn apply_hooks_to_dir(hooks_dir: &Path, items: &[ImportableItem]) -> anyhow::Res
 #[cfg(test)]
 mod tests {
     use super::*;
+    use xai_grok_workspace::HookSourceConfig;
+
+    fn source_path_strs(sources: &[HookSourceConfig]) -> Vec<String> {
+        sources
+            .iter()
+            .map(|s| match s {
+                HookSourceConfig::SettingsFile(p) | HookSourceConfig::Directory(p) => {
+                    p.to_string_lossy().into_owned()
+                }
+            })
+            .collect()
+    }
 
     #[test]
     fn format_rule_bash_with_pattern() {
@@ -1241,10 +1200,18 @@ mod tests {
         // Only the new rule is added; the existing one is deduped
         assert_eq!(count, 1);
 
-        let arr = table["permission"]["allow"].as_array().unwrap();
-        assert_eq!(arr.len(), 2);
-        assert_eq!(arr[0].as_str().unwrap(), "Bash(npm test)");
-        assert_eq!(arr[1].as_str().unwrap(), "Bash(npm run build)");
+        let Some(arr) = table
+            .get("permission")
+            .and_then(|p| p.get("allow"))
+            .and_then(|a| a.as_array())
+        else {
+            panic!("expected permission.allow: {table:?}");
+        };
+        let [a0, a1] = arr.as_slice() else {
+            panic!("expected two allow rules: {arr:?}");
+        };
+        assert_eq!(a0.as_str(), Some("Bash(npm test)"));
+        assert_eq!(a1.as_str(), Some("Bash(npm run build)"));
     }
 
     #[test]
@@ -1264,13 +1231,18 @@ mod tests {
         // Only NEW_VAR is added
         assert_eq!(count, 1);
 
-        let env_table = table["env"].as_table().unwrap();
+        let Some(env_table) = table.get("env").and_then(|v| v.as_table()) else {
+            panic!("expected env table: {table:?}");
+        };
         assert_eq!(
-            env_table["EXISTING"].as_str().unwrap(),
-            "old_value",
+            env_table.get("EXISTING").and_then(|v| v.as_str()),
+            Some("old_value"),
             "existing key should NOT be overwritten"
         );
-        assert_eq!(env_table["NEW_VAR"].as_str().unwrap(), "value");
+        assert_eq!(
+            env_table.get("NEW_VAR").and_then(|v| v.as_str()),
+            Some("value")
+        );
     }
 
     #[test]
@@ -1278,7 +1250,13 @@ mod tests {
         let mut table = TomlMap::new();
         let count = merge_env_vars(&mut table, &[("FOO", "bar")]);
         assert_eq!(count, 1);
-        assert_eq!(table["env"]["FOO"].as_str().unwrap(), "bar");
+        assert_eq!(
+            table
+                .get("env")
+                .and_then(|e| e.get("FOO"))
+                .and_then(|v| v.as_str()),
+            Some("bar")
+        );
     }
 
     #[test]
@@ -1334,12 +1312,28 @@ mod tests {
 
         let content = std::fs::read_to_string(&path).unwrap();
         let parsed: TomlValue = toml::from_str(&content).unwrap();
-        assert_eq!(parsed["other"]["key"].as_str().unwrap(), "value");
         assert_eq!(
-            parsed["mcp_servers"]["foo"]["command"].as_str().unwrap(),
-            "x"
+            parsed
+                .get("other")
+                .and_then(|o| o.get("key"))
+                .and_then(|v| v.as_str()),
+            Some("value")
         );
-        assert!(parsed["claude_compat"]["imported"].as_bool().unwrap());
+        assert_eq!(
+            parsed
+                .get("mcp_servers")
+                .and_then(|m| m.get("foo"))
+                .and_then(|f| f.get("command"))
+                .and_then(|v| v.as_str()),
+            Some("x")
+        );
+        assert_eq!(
+            parsed
+                .get("claude_compat")
+                .and_then(|c| c.get("imported"))
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
     }
 
     #[test]
@@ -1390,14 +1384,14 @@ mod tests {
         .unwrap();
         let items = extract_hooks_from_settings_file(&path);
         assert_eq!(items.len(), 1);
-        let ImportableItem::Hook {
+        let Some(ImportableItem::Hook {
             event,
             matcher,
             command,
             timeout,
-        } = &items[0]
+        }) = items.first()
         else {
-            panic!("expected Hook variant");
+            panic!("expected Hook variant: {items:?}");
         };
         assert_eq!(event, "PreToolUse");
         assert_eq!(matcher.as_deref(), Some("Bash"));
@@ -1460,10 +1454,25 @@ mod tests {
         let target = hooks_dir.join("imported-from-claude.json");
         let content = std::fs::read_to_string(&target).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
-        let groups = parsed["hooks"]["PreToolUse"].as_array().unwrap();
-        assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0]["matcher"].as_str().unwrap(), "Bash");
-        assert_eq!(groups[0]["hooks"][0]["command"].as_str().unwrap(), "echo x");
+        let Some(groups) = parsed
+            .get("hooks")
+            .and_then(|h| h.get("PreToolUse"))
+            .and_then(|v| v.as_array())
+        else {
+            panic!("expected PreToolUse hooks: {parsed:?}");
+        };
+        let [group] = groups.as_slice() else {
+            panic!("expected one group: {groups:?}");
+        };
+        assert_eq!(group.get("matcher").and_then(|v| v.as_str()), Some("Bash"));
+        assert_eq!(
+            group
+                .get("hooks")
+                .and_then(|h| h.get(0))
+                .and_then(|h| h.get("command"))
+                .and_then(|v| v.as_str()),
+            Some("echo x")
+        );
     }
 
     #[test]
@@ -1503,7 +1512,13 @@ mod tests {
 
         let content = std::fs::read_to_string(&target).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
-        let groups = parsed["hooks"]["PreToolUse"].as_array().unwrap();
+        let Some(groups) = parsed
+            .get("hooks")
+            .and_then(|h| h.get("PreToolUse"))
+            .and_then(|v| v.as_array())
+        else {
+            panic!("expected PreToolUse hooks: {parsed:?}");
+        };
         assert_eq!(groups.len(), 2);
     }
 
@@ -1528,21 +1543,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let compat = xai_grok_tools::types::compat::CompatConfig::default();
         let paths = crate::util::hooks::discover_hook_source_paths(Some(dir.path()), &compat);
-        let project_strs: Vec<String> = paths
-            .project
-            .iter()
-            .map(|p| p.to_string_lossy().to_string())
-            .collect();
+        let project_strs = source_path_strs(&paths.project);
         assert!(
             !project_strs.iter().any(|s| s.contains(".claude")),
             "project sources should not include .claude/ when marker set; got {:?}",
             project_strs
         );
-        let global_strs: Vec<String> = paths
-            .global
-            .iter()
-            .map(|p| p.to_string_lossy().to_string())
-            .collect();
+        let global_strs = source_path_strs(&paths.global);
         assert!(
             !global_strs.iter().any(|s| s.contains("/.claude/")),
             "global sources should not include ~/.claude/ when marker set; got {:?}",
@@ -1555,6 +1562,8 @@ mod tests {
     fn gate_load_claude_env_returns_empty_when_marker_set() {
         let _g = MarkerGuard;
         refresh_marker_cache(true);
+        // Also set the env-var override so the workspace-resident marker reader (which can't see the shell-side cache) honours the gate
+        unsafe { std::env::set_var("_GROK_CLAUDE_MARKER_OVERRIDE", "1") };
         let dir = tempfile::tempdir().unwrap();
         let env = xai_grok_workspace::permission::claude_settings::load_claude_env_with_project(
             dir.path(),
@@ -1574,11 +1583,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let compat = xai_grok_tools::types::compat::CompatConfig::default();
         let paths = crate::util::hooks::discover_hook_source_paths(Some(dir.path()), &compat);
-        let project_strs: Vec<String> = paths
-            .project
-            .iter()
-            .map(|p| p.to_string_lossy().to_string())
-            .collect();
+        let project_strs = source_path_strs(&paths.project);
         assert!(
             project_strs.iter().any(|s| s.contains(".claude")),
             "project sources should include .claude/ when marker unset; got {:?}",
@@ -1594,11 +1599,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let compat = xai_grok_tools::types::compat::CompatConfig::default();
         let paths = crate::util::hooks::discover_hook_source_paths(Some(dir.path()), &compat);
-        let global_strs: Vec<String> = paths
-            .global
-            .iter()
-            .map(|p| p.to_string_lossy().to_string())
-            .collect();
+        let global_strs = source_path_strs(&paths.global);
         assert!(
             global_strs
                 .iter()
@@ -1606,11 +1607,7 @@ mod tests {
             "global sources should include ~/.cursor/hooks.json; got {:?}",
             global_strs
         );
-        let project_strs: Vec<String> = paths
-            .project
-            .iter()
-            .map(|p| p.to_string_lossy().to_string())
-            .collect();
+        let project_strs = source_path_strs(&paths.project);
         assert!(
             project_strs
                 .iter()
@@ -1629,21 +1626,13 @@ mod tests {
         let mut compat = xai_grok_tools::types::compat::CompatConfig::default();
         compat.cursor.hooks = false;
         let paths = crate::util::hooks::discover_hook_source_paths(Some(dir.path()), &compat);
-        let global_strs: Vec<String> = paths
-            .global
-            .iter()
-            .map(|p| p.to_string_lossy().to_string())
-            .collect();
+        let global_strs = source_path_strs(&paths.global);
         assert!(
             !global_strs.iter().any(|s| s.contains(".cursor")),
             "global sources should not include .cursor/ when disabled; got {:?}",
             global_strs
         );
-        let project_strs: Vec<String> = paths
-            .project
-            .iter()
-            .map(|p| p.to_string_lossy().to_string())
-            .collect();
+        let project_strs = source_path_strs(&paths.project);
         assert!(
             !project_strs.iter().any(|s| s.contains(".cursor")),
             "project sources should not include .cursor/ when disabled; got {:?}",
@@ -1661,21 +1650,13 @@ mod tests {
         let mut compat = xai_grok_tools::types::compat::CompatConfig::default();
         compat.claude.hooks = false;
         let paths = crate::util::hooks::discover_hook_source_paths(Some(dir.path()), &compat);
-        let global_strs: Vec<String> = paths
-            .global
-            .iter()
-            .map(|p| p.to_string_lossy().to_string())
-            .collect();
+        let global_strs = source_path_strs(&paths.global);
         assert!(
             !global_strs.iter().any(|s| s.contains("/.claude/")),
             "global sources should not include ~/.claude/ when compat disabled; got {:?}",
             global_strs
         );
-        let project_strs: Vec<String> = paths
-            .project
-            .iter()
-            .map(|p| p.to_string_lossy().to_string())
-            .collect();
+        let project_strs = source_path_strs(&paths.project);
         assert!(
             !project_strs.iter().any(|s| s.contains(".claude")),
             "project sources should not include .claude/ when compat disabled; got {:?}",
@@ -1825,7 +1806,7 @@ mod tests {
         .unwrap();
         let items = extract_hooks_from_settings_file(&path);
         assert_eq!(items.len(), 1);
-        if let ImportableItem::Hook { command, .. } = &items[0] {
+        if let Some(ImportableItem::Hook { command, .. }) = items.first() {
             assert_eq!(command, "");
         } else {
             panic!("expected Hook variant");
@@ -1859,10 +1840,26 @@ mod tests {
 
         let content = std::fs::read_to_string(&target).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
-        let groups = parsed["hooks"]["PreToolUse"].as_array().unwrap();
-        assert_eq!(groups.len(), 1);
-        let handlers = groups[0]["hooks"].as_array().unwrap();
-        assert_eq!(handlers[0]["timeout"].as_u64(), Some(60));
+        let Some(groups) = parsed
+            .get("hooks")
+            .and_then(|h| h.get("PreToolUse"))
+            .and_then(|v| v.as_array())
+        else {
+            panic!("expected PreToolUse hooks: {parsed:?}");
+        };
+        let [group] = groups.as_slice() else {
+            panic!("expected one group: {groups:?}");
+        };
+        let Some(handlers) = group.get("hooks").and_then(|h| h.as_array()) else {
+            panic!("expected handlers: {group:?}");
+        };
+        assert_eq!(
+            handlers
+                .first()
+                .and_then(|h| h.get("timeout"))
+                .and_then(|v| v.as_u64()),
+            Some(60)
+        );
     }
 
     #[test]
@@ -1892,10 +1889,16 @@ mod tests {
 
         let content = std::fs::read_to_string(&target).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
-        let handlers = parsed["hooks"]["PreToolUse"][0]["hooks"]
-            .as_array()
-            .unwrap();
-        assert!(handlers[0].get("timeout").is_none());
+        let Some(handlers) = parsed
+            .get("hooks")
+            .and_then(|h| h.get("PreToolUse"))
+            .and_then(|v| v.get(0))
+            .and_then(|g| g.get("hooks"))
+            .and_then(|h| h.as_array())
+        else {
+            panic!("expected handlers: {parsed:?}");
+        };
+        assert!(handlers.first().is_some_and(|h| h.get("timeout").is_none()));
     }
 
     #[test]
@@ -1903,10 +1906,18 @@ mod tests {
         let mut table = TomlMap::new();
         let count = merge_paths(&mut table, "extra_skill_dirs", &["/a", "/b"]).unwrap();
         assert_eq!(count, 2);
-        let arr = table["paths"]["extra_skill_dirs"].as_array().unwrap();
-        assert_eq!(arr.len(), 2);
-        assert_eq!(arr[0].as_str().unwrap(), "/a");
-        assert_eq!(arr[1].as_str().unwrap(), "/b");
+        let Some(arr) = table
+            .get("paths")
+            .and_then(|p| p.get("extra_skill_dirs"))
+            .and_then(|a| a.as_array())
+        else {
+            panic!("expected extra_skill_dirs: {table:?}");
+        };
+        let [a0, a1] = arr.as_slice() else {
+            panic!("expected two dirs: {arr:?}");
+        };
+        assert_eq!(a0.as_str(), Some("/a"));
+        assert_eq!(a1.as_str(), Some("/b"));
     }
 
     #[test]
@@ -1921,7 +1932,13 @@ mod tests {
 
         let count = merge_paths(&mut table, "extra_skill_dirs", &["/existing", "/new"]).unwrap();
         assert_eq!(count, 1, "existing entry should be deduped");
-        let arr = table["paths"]["extra_skill_dirs"].as_array().unwrap();
+        let Some(arr) = table
+            .get("paths")
+            .and_then(|p| p.get("extra_skill_dirs"))
+            .and_then(|a| a.as_array())
+        else {
+            panic!("expected extra_skill_dirs: {table:?}");
+        };
         assert_eq!(arr.len(), 2);
     }
 
@@ -1966,12 +1983,20 @@ extra_rule_dirs = ["/c/rules"]
         let content = std::fs::read_to_string(&path).unwrap();
         let parsed: TomlValue = toml::from_str(&content).unwrap();
         assert_eq!(
-            parsed["paths"]["extra_skill_dirs"][0].as_str().unwrap(),
-            "/foo/skills"
+            parsed
+                .get("paths")
+                .and_then(|p| p.get("extra_skill_dirs"))
+                .and_then(|a| a.get(0))
+                .and_then(|v| v.as_str()),
+            Some("/foo/skills")
         );
         assert_eq!(
-            parsed["paths"]["extra_rule_dirs"][0].as_str().unwrap(),
-            "/bar/rules"
+            parsed
+                .get("paths")
+                .and_then(|p| p.get("extra_rule_dirs"))
+                .and_then(|a| a.get(0))
+                .and_then(|v| v.as_str()),
+            Some("/bar/rules")
         );
     }
 
@@ -1983,8 +2008,7 @@ extra_rule_dirs = ["/c/rules"]
         let home = dir.path();
         std::fs::create_dir_all(home.join(".claude").join("skills")).unwrap();
 
-        // Build a plan by directly invoking the scan with a synthetic plan and a cwd whose `find_project_root` returns the same `home`
-        // We can't easily mock `xai_dirs::home_dir()`, so this test focuses on the dedup *logic*
+        // Build a plan by directly invoking the scan with a synthetic plan and a cwd whose `find_project_root` returns the same `home` We can't easily mock `xai_dirs::home_dir()`, so this test focuses on the dedup *logic*
         // It manually populates `global_items` first, then asserts that the project-side branch with the same path would skip
         // Direct end-to-end coverage of the home-collision case requires `GROK_HOME` plumbing which is intentionally out of scope
         let global = dunce::canonicalize(home.join(".claude").join("skills")).unwrap();
@@ -2036,12 +2060,9 @@ extra_rule_dirs = ["/c/rules"]
         )
         .unwrap();
 
-        // Note: `resolve_permissions_with_provenance` ALSO reads requirements,
-        // managed settings, and the developer's real `~/.grok/config.toml`.
+        // Note: `resolve_permissions_with_provenance` ALSO reads requirements, managed settings, and the developer's real `~/.grok/config.toml`.
         // We can't isolate `grok_home()` because it's `OnceLock`-cached.
-        // Instead, assert on rule *provenance*: no rule should originate from
-        // our tempdir's `.claude/settings.json`. The dev's real ~/.grok
-        // config rules (if any) are out of scope for this test.
+        // Instead, assert on rule *provenance*: no rule should originate from our tempdir's `.claude/settings.json`. The dev's real ~/.grok config rules (if any) are out of scope for this test.
         let resolved =
             xai_grok_workspace::permission::resolution::resolve_permissions_with_provenance(
                 dir.path(),
@@ -2086,12 +2107,8 @@ extra_rule_dirs = ["/c/rules"]
     #[serial]
     fn gate_marker_cache_unset_means_uses_disk() {
         // Sanity test: with the cache reset, `is_claude_import_marked()` must (a) not panic and (b) populate the cache for subsequent reads
-        //
-        // We intentionally **do not** assert a specific cached value: the
-        // dev's real `~/.grok/config.toml` may legitimately have the marker
-        // set during local testing, and we can't override `grok_home()`
-        // It's `OnceLock`-cached, so any prior test that calls it locks the value in for the entire process
-        // The `MarkerGuard` resets the cache after this test, so subsequent gate tests start clean
+        // We intentionally **do not** assert a specific cached value: the dev's real `~/.grok/config.toml` may legitimately have the marker set during local testing, and we can't override `grok_home()`
+        // It's `OnceLock`-cached, so any prior test that calls it locks the value in for the entire process The `MarkerGuard` resets the cache after this test, so subsequent gate tests start clean
         let _g = MarkerGuard;
         reset_marker_cache_for_test();
         let _ = is_claude_import_marked();

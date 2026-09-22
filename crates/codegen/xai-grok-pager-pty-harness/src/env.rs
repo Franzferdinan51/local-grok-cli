@@ -66,7 +66,7 @@ fn ensure_local_pager_binary(binary: &std::path::Path) -> Result<()> {
 ///
 /// Resolution order:
 /// 1. `PAGER_BINARY` env var (for CI / explicit override)
-/// 2. `CARGO_BIN_EXE_grok_local` (set by `cargo test`)
+/// 2. `CARGO_BIN_EXE_grok_local` / `CARGO_BIN_EXE_xai-grok-pager` (set by `cargo test`)
 /// 3. Build locally via `cargo build -p xai-grok-pager-bin` (the composition-
 ///    root package that owns the `grok-local` binary)
 pub fn pager_binary() -> Result<PathBuf> {

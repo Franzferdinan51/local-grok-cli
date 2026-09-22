@@ -45,6 +45,10 @@ Location: `~/.grok/config.toml`. If the file is missing, Grok uses its built-in 
 [cli]
 auto_update = true                     # check for updates on launch
 
+[agent]
+# name = "grok-build"                  # default agent on interactive `grok` (no --plan / --agent-profile)
+# definition = "/path/to/agent.md"     # path wins over name if both are set
+
 [models]
 default = "grok-4.5"                   # model used for new sessions
 web_search = "grok-4.5"                # model used by the web_search tool
@@ -114,6 +118,18 @@ respect_gitignore = false              # default: false; set true to make every 
 # max_parallel_video_gen_calls = 4
 ```
 
+### Default agent
+
+Interactive `grok` uses `[agent]` in `config.toml` when you do not pass `--plan`, `--ask-user`, or `--agent-profile`:
+
+```toml
+[agent]
+name = "my-custom-agent"
+# definition = "/path/to/agent.md"   # path wins over name
+```
+
+`definition` is a markdown file with YAML frontmatter. `name` is a built-in or discovered agent (`~/.grok/agents/`, `.grok/agents/`). If the named agent is missing, Grok uses `GROK_AGENT`, then the built-in default. `--agent-profile`, `--plan`, and `--ask-user` still override that session. Field list: [26-config-reference.md](26-config-reference.md).
+
 #### Input mode
 
 `[ui] simple_mode` controls how you edit text in the **prompt** — the input editor. It has nothing to do with how you move around the scrollback; that's [`vim_mode`](#vim-mode).
@@ -160,8 +176,8 @@ You can also override this with `GROK_DEFAULT_SELECTED_PERMISSION`, which is han
 
 | Value | Behavior |
 |-------|----------|
-| `false` (default) | Bare-letter and `Shift+letter` keys (`j`/`k`, `h`/`l`, `g`/`G`, `y`/`Y`, `o`/`O`, `r`, `x`, `e`/`E`, `H`/`L`, plus `i`) are suppressed in the scrollback: pressing one focuses the prompt and types the character. Arrows, `Tab`, `Space`, `PageUp`/`PageDown`, and every `Ctrl+letter` shortcut still navigate. `Esc` is **not** a scrollback key — it cancels a running turn, and while idle follows the clear / rewind policy (see [Keyboard Shortcuts](03-keyboard-shortcuts.md#escape)). |
-| `true` | All vim-style scrollback bindings are active, exactly as listed in [Keyboard Shortcuts](03-keyboard-shortcuts.md). Mid-turn `Esc` is swallowed in this mode (`Ctrl+C` cancels); minimal mode keeps Esc-cancel regardless. |
+| `false` (default) | Bare-letter and `Shift+letter` keys (`j`/`k`, `h`/`l`, `g`/`G`, `y`/`Y`, `o`/`O`, `r`, `x`, `e`/`E`, `H`/`L`, plus `i`) are suppressed in the scrollback: pressing one focuses the prompt and types the character. Arrows, `Tab`, `Space`, `PageUp`/`PageDown`, and every `Ctrl+letter` shortcut still navigate. `Esc` is **not** a scrollback key — it never cancels a running turn (`Ctrl+C` does), and while idle follows the clear / rewind policy (see [Keyboard Shortcuts](03-keyboard-shortcuts.md#escape)). |
+| `true` | All vim-style scrollback bindings are active, exactly as listed in [Keyboard Shortcuts](03-keyboard-shortcuts.md). Esc behavior is the same in both settings. |
 
 Toggle it at runtime with `/vim-mode`, or from `/settings` → **Vim scrollback navigation**. Grok writes the change to `[ui] vim_mode` immediately and applies it to every future pager session, including new agents and subagents in the same process. There's no per-session override — `config.toml` is the source of truth on next launch. `vim_mode` is independent of `simple_mode`.
 
@@ -311,11 +327,14 @@ Priority for `[mcp_servers]` and `[plugins]`: `.grok/config.toml` (current dir) 
 
 ### Memory
 
-Persist knowledge across sessions. Enable memory with `GROK_MEMORY=1`, `[memory] enabled = true`, or managed remote settings.
+Persist knowledge across sessions. Enable it with `[memory] enabled = true` or
+`GROK_MEMORY=1`; an explicit `[memory] enabled = false` turns it off even when a
+managed remote setting enables it. Notes recorded by earlier versions are
+carried over automatically. See [13-memory.md](13-memory.md).
 
 ```toml
 [memory]
-enabled = false                       # enable memory
+enabled = true
 
 [memory.session]
 save_on_end = true                    # write metadata summary on session end
@@ -834,6 +853,14 @@ The key ones. See the README for the complete list.
 | `.grok/agents/` | Project-scoped agent definitions |
 | `.grok/hooks/` | Project-scoped hooks |
 | `.grok/lsp.json` | LSP server configuration |
+
+### How Grok saves `config.toml`
+
+Writes to **`~/.grok/config.toml`** (`/settings`, `/vim-mode`, and other user-config saves) follow a leaf symlink. The atomic rename writes the referent (a file in your dotfiles repo). The link stays a link. If the link is dangling, the write creates the referent as a regular file.
+
+Writes to a **project** `.grok/config.toml` (MCP / plugin / permission edits) **replace** a leaf symlink with a regular file. That keeps a later save from following the link out of the repository.
+
+A user `config.toml` that cannot be parsed is not overwritten. Fix the syntax (or restore a backup) and save again.
 
 ---
 

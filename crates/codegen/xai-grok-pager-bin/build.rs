@@ -36,7 +36,7 @@ fn main() {
     let build_version = std::env::var("GROK_VERSION")
         .or_else(|_| std::env::var("CARGO_PKG_VERSION"))
         .unwrap_or_else(|_| "0.0.0".to_string());
-    let local_version = std::env::var("GROK_LOCAL_VERSION").unwrap_or_else(|_| "0.4.9".to_string());
+    let local_version = std::env::var("GROK_LOCAL_VERSION").unwrap_or_else(|_| "0.4.10".to_string());
     let source_rev = std::fs::read_to_string("../../../SOURCE_REV")
         .ok()
         .and_then(|s| s.split_whitespace().next().map(str::to_string))
@@ -45,4 +45,14 @@ fn main() {
 
     println!("cargo:rustc-env=VERSION_WITH_COMMIT={build_version} ({source_short})");
     println!("cargo:rustc-env=LOCAL_VERSION_WITH_COMMIT={local_version} ({commit})");
+
+    // grove-projfs imports `ProjectedFSLib.dll`, absent until `Client-ProjFS` is
+    // enabled; a load-time import kills startup with STATUS_DLL_NOT_FOUND. Link
+    // args from grove-projfs/build.rs do not propagate to this exe.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
+    {
+        println!("cargo:rustc-link-arg=/DELAYLOAD:ProjectedFSLib.dll");
+        println!("cargo:rustc-link-arg=delayimp.lib");
+    }
 }

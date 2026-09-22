@@ -1,11 +1,11 @@
 //! Reads the model list from an OpenAI-compatible `/v1/models`.
 use crate::agent::config::EndpointsConfig;
-use crate::agent::models::ModelFetchAuth;
-use crate::auth::GrokAuth;
-use crate::auth::backend::{ActiveAuthBackend, AuthBackend};
+use crate::agent::remote_config::ModelFetchAuth;
 use crate::remote::client::{BackendError, FetchModelsResult, parse_remote_model_value};
 use crate::remote::model_source::ModelSource;
 use serde::Deserialize;
+use xai_grok_login::GrokAuth;
+use xai_grok_login::backend::{ActiveAuthBackend, AuthBackend};
 #[derive(Debug, Deserialize)]
 struct ModelsResponse {
     data: Vec<serde_json::Value>,
@@ -148,7 +148,7 @@ mod tests {
     #[serial_test::serial]
     fn models_fetch_endpoint_matches_auth_mode() {
         use crate::agent::config::EndpointsConfig;
-        use crate::agent::models::ModelFetchAuth;
+        use crate::agent::remote_config::ModelFetchAuth;
         for k in [
             "GROK_CLI_CHAT_PROXY_BASE_URL",
             "GROK_XAI_API_BASE_URL",
@@ -171,7 +171,15 @@ mod tests {
         no_custom.models_base_url = None;
         no_custom.xai_api_base_url = "https://inference.acme-corp.example/xai/v1".to_owned();
         let api = ListModelsEndpoint::from_endpoints(&no_custom, ModelFetchAuth::ApiKey);
-        assert_eq!(api.url, "https://inference.acme-corp.example/xai/v1/models");
+        // GROK_LOCAL: local inference is the default, so the models list
+        // comes from the local server even when `xai_api_base_url` is set.
+        assert_eq!(
+            api.url,
+            format!(
+                "{}/models",
+                crate::agent::config::LM_STUDIO_BASE_URL_DEFAULT
+            )
+        );
         assert_eq!(api.auth, EndpointAuth::ApiKey);
         let custom = EndpointsConfig::from_config_value(
             &toml::from_str(

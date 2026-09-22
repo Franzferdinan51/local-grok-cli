@@ -166,8 +166,8 @@ fn resolve_compat_entry(
     };
 
     ExternalCompatEntry {
-        vendor: cell.vendor().as_str().to_owned(),
-        surface: cell.surface().as_str().to_owned(),
+        vendor: cell.vendor().as_ref().to_owned(),
+        surface: cell.surface().as_ref().to_owned(),
         enabled: resolved.value,
         source,
     }
@@ -219,7 +219,10 @@ mod tests {
         assert_eq!(session.enabled, CompatConfig::default().codex.sessions);
         assert_eq!(session.source, CompatSource::Default);
         let json = serde_json::to_value(&report).unwrap();
-        assert_eq!(json["remoteSettingsLoaded"], false);
+        assert_eq!(
+            json.get("remoteSettingsLoaded"),
+            Some(&serde_json::Value::Bool(false))
+        );
         assert_eq!(
             serde_json::to_value(session).unwrap(),
             serde_json::json!({

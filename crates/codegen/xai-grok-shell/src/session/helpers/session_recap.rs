@@ -13,16 +13,8 @@ use xai_chat_state::{compaction_utils, estimate_conversation_tokens, estimate_it
 /// This only guards against runaway model output and never cuts a normal recap.
 const RECAP_MAX_CHARS: usize = 1200;
 
-/// Build the instruction turn appended to the conversation snapshot.
-///
 /// All recap directions live in this single user message (wrapped in a `<system-reminder>`) rather than a separate system prompt.
-/// The conversation prefix, including the agent's real system prompt at `conversation[0]`, is reused verbatim so the prompt cache stays warm.
-///
-/// `tag` is the reminder tag for the active harness (`"system-reminder"`, or template-specific tags).
-///
 /// The output is body text only: the pager adds `Recap —` on render (manual and auto).
-///
-/// Keep in sync with the recap prompt eval harness (tune the prompt there first).
 /// Few-shots must stay synthetic: never embed real eval/session content.
 pub(crate) fn recap_instruction(tag: &str) -> String {
     format!(
@@ -54,13 +46,9 @@ pub(crate) fn recap_instruction(tag: &str) -> String {
     )
 }
 
-/// Prepare the conversation snapshot for a recap / turn-summary request (same request shape, different instruction).
-///
-/// 1. Optionally strips reasoning/thinking blocks (`strip_reasoning`).
-///    Side-calls that reuse the prompt cache pass `false` so the conversation prefix remains byte-identical to the parent turn.
-/// 2. Truncates a trailing incomplete assistant/tool-result run.
-///    A recap can fire mid-turn, and the Anthropic Messages API rejects `tool_use` ids without a matching `tool_result`.
-/// 3. Appends the instruction as a final user turn.
+/// Optionally strips reasoning/thinking blocks (`strip_reasoning`).
+/// Side-calls that reuse the prompt cache pass `false` so the conversation prefix remains byte-identical to the parent turn.
+/// A recap can fire mid-turn, and the Anthropic Messages API rejects `tool_use` ids without a matching `tool_result`.
 pub(crate) fn build_instruction_items(
     conversation: Vec<ConversationItem>,
     instruction: String,
@@ -91,18 +79,8 @@ const RECAP_BUDGET_THRESHOLD_PERCENT: u64 = 85;
 /// (`max_prompt_length` is input-length, so output doesn't count.)
 const RECAP_BUDGET_HEADROOM_TOKENS: u64 = 4_000;
 
-/// Budget-aware variant of [`build_instruction_items`].
-/// Best-effort: returns a structurally-valid, non-empty request trimmed to the estimated prompt budget.
 /// The budget uses the same bytes/4 estimator that compaction triggers on, preventing `ic_400_prompt_too_long` on long sessions.
-/// Not an absolute guarantee: a degenerate tiny window, an oversized retained `System` prefix, or estimator optimism can still exceed the real limit.
-/// (The 85% threshold, the headroom, and the 500k cap make that unlikely for normal grok-build sessions.)
-///
-/// * Fast path: if the whole snapshot already fits, returns `build_instruction_items(...)` verbatim.
-///   This keeps the grok prefix KV cache warm and honors the caller's `strip_reasoning`.
-/// * Over budget: strips reasoning (the prefix cache is lost once we trim) and normalizes the trailing boundary ([`pop_trailing_tool_run`]).
-///   Then front-trims to fit via `fit_conversation_to_budget` (System kept, most-recent turn truncated in place, never emptied).
-///   The instruction is appended last.
-///
+/// Over budget: strips reasoning (the prefix cache is lost once we trim) and normalizes the trailing boundary ([`pop_trailing_tool_run`]).
 /// `context_window` MUST be the window of the model the recap is actually sent to (today the session model).
 pub(crate) fn budget_recap_items(
     conversation: Vec<ConversationItem>,
@@ -181,14 +159,14 @@ pub(crate) const MIN_TURNS_FOR_AUTO_RECAP: usize = 3;
 /// It is written only when a recap commits (success, or an over-long auto recap suppressed from display), never on failure/cancel.
 pub(crate) const RECAP_WATERMARK_FILE: &str = "last_recap_main_turn";
 
-/// Counts real user prompts (`synthetic_reason.is_none()`), not assistant/tool items.
+/// Counts real user prompts (`synthetic_reason.is_human()`), not assistant/tool items.
 pub(crate) fn main_turn_count(conversation: &[ConversationItem]) -> usize {
     conversation
         .iter()
         .filter(|item| {
             matches!(
                 item,
-                ConversationItem::User(u) if u.synthetic_reason.is_none()
+                ConversationItem::User(u) if u.synthetic_reason.is_human()
             )
         })
         .count()
@@ -254,8 +232,6 @@ pub(crate) fn should_suppress_auto_recap_display(raw: &str, summary: &str) -> bo
 }
 
 /// Clean the model's raw recap output into a readable one-liner body.
-///
-/// Normalizes whitespace and strips a stray leading label/quotes if the model added one anyway.
 /// Caps length at [`RECAP_MAX_CHARS`] as a safety net against runaway output (the cap is generous, so a normal recap is never cut).
 /// Does not prepend `Recap —`; the pager always prefixes with that label on render.
 pub(crate) fn clean_recap_text(raw: &str) -> String {
@@ -281,10 +257,11 @@ pub(crate) fn clean_recap_text(raw: &str) -> String {
     // Strip symmetric wrapping quotes around the whole string.
     if out.len() >= 2 {
         let bytes = out.as_bytes();
-        let first = bytes[0];
-        let last = bytes[bytes.len() - 1];
-        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
-            out = out[1..out.len() - 1].trim().to_string();
+        if let (Some(&first), Some(&last)) = (bytes.first(), bytes.last())
+            && ((first == b'"' && last == b'"') || (first == b'\'' && last == b'\''))
+            && let Some(inner) = out.get(1..out.len() - 1)
+        {
+            out = inner.trim().to_string();
         }
     }
 
@@ -402,7 +379,7 @@ mod tests {
                 content: vec![ContentPart::Text {
                     text: Arc::from("injected"),
                 }],
-                synthetic_reason: Some(SyntheticReason::SystemReminder),
+                synthetic_reason: SyntheticReason::SystemReminder,
                 ..Default::default()
             }),
         ];
@@ -684,7 +661,9 @@ mod tests {
 
         // (b) No trailing tool run before the appended instruction.
         assert!(matches!(out.last(), Some(ConversationItem::User(_))));
-        let before = &out[out.len() - 2];
+        let Some(before) = out.len().checked_sub(2).and_then(|i| out.get(i)) else {
+            panic!("expected at least two recap items: {out:?}");
+        };
         assert!(
             !matches!(before, ConversationItem::ToolResult(_)),
             "no tool_result immediately before the appended instruction"
@@ -796,7 +775,7 @@ mod tests {
         ];
         pop_trailing_tool_run(&mut items);
         assert_eq!(items.len(), 1);
-        assert!(matches!(items[0], ConversationItem::User(_)));
+        assert!(matches!(items.first(), Some(ConversationItem::User(_))));
 
         let mut clean = vec![
             ConversationItem::user("hi"),
@@ -858,10 +837,9 @@ mod tests {
 
     #[test]
     fn budget_degenerate_tiny_window_stays_valid_and_nonempty() {
-        // A window below the headroom makes prompt_budget saturate to 0
-        // The instruction is still appended, so the output necessarily exceeds the computed 0 budget
-        // It stays tiny and structurally valid (cannot cause a 400)
-        // The test asserts graceful degradation, NOT `est <= budget` (it documents the degenerate-window behavior)
+        // A window below the headroom makes prompt_budget saturate to 0.
+        // The instruction is still appended, so the output necessarily exceeds the computed 0 budget.
+        // It stays tiny and structurally valid (cannot cause a 400).
         let conv = vec![
             ConversationItem::system("sys"),
             ConversationItem::user("w".repeat(40_000)),

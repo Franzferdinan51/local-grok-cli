@@ -83,10 +83,9 @@ impl ModelState {
             })
     }
 
-    /// Whether the current model accepts image input, read from the model's `meta` (the ACP extension point, same source as `totalContextTokens`).
-    /// Honors an explicit `acceptsImages` bool, else an `inputModalities` array containing `"image"`.
-    /// DEFAULTS TO `true` when neither key is present: all current Grok models accept images, so nothing is suppressed today.
-    /// Once the ACP server populates the key, non-vision models get suppressed.
+    /// Whether the current model accepts image input, read from the model's `meta` (the ACP extension point, same
+    /// source as `totalContextTokens`). Honors an explicit `acceptsImages` bool, else an `inputModalities` array
+    /// containing `"image"`. Once the ACP server populates the key, non-vision models get suppressed.
     pub fn current_model_accepts_images(&self) -> bool {
         let Some(meta) = self
             .current
@@ -161,6 +160,28 @@ impl ModelState {
             return Vec::new();
         }
         parse_reasoning_efforts_meta(info.meta.as_ref()).unwrap_or_else(legacy_effort_options)
+    }
+
+    /// The effort row the pickers highlight when the menu for `id` opens. `None` leaves the cursor on the first row.
+    /// Precedence: the session's live effort when `id` is the current model, else the model's `meta.reasoningEffort`,
+    /// else the option flagged `default`. A candidate counts only if the menu offers its value.
+    pub(crate) fn preselected_effort_option_for(
+        &self,
+        id: &acp::ModelId,
+    ) -> Option<ReasoningEffortOption> {
+        let options = self.reasoning_effort_options_for(id);
+        let offered = |effort: ReasoningEffort| options.iter().find(|opt| opt.value == effort);
+        let live = self
+            .reasoning_effort
+            .filter(|_| self.current.as_ref() == Some(id));
+        let meta_default = self
+            .available
+            .get(id)
+            .and_then(|info| parse_reasoning_effort_meta(info.meta.as_ref()));
+        live.and_then(offered)
+            .or_else(|| meta_default.and_then(offered))
+            .or_else(|| options.iter().find(|opt| opt.default))
+            .cloned()
     }
 
     /// Map a typed or selected effort token to its canonical value for the current model.
@@ -365,11 +386,13 @@ mod tests {
             ],
         })));
         let opts = state.reasoning_effort_options();
-        assert_eq!(opts.len(), 2);
-        assert_eq!(opts[0].label, "Balanced");
-        assert_eq!(opts[0].value, ReasoningEffort::Medium);
-        assert_eq!(opts[1].id, "deep");
-        assert_eq!(opts[1].description.as_deref(), Some("Max"));
+        let [first, second] = opts.as_slice() else {
+            panic!("expected 2 options, got {}", opts.len());
+        };
+        assert_eq!(first.label, "Balanced");
+        assert_eq!(first.value, ReasoningEffort::Medium);
+        assert_eq!(second.id, "deep");
+        assert_eq!(second.description.as_deref(), Some("Max"));
     }
 
     #[test]
@@ -498,6 +521,54 @@ mod tests {
             !msg.contains("unset"),
             "unset is log-only, not a user token: {msg}"
         );
+    }
+
+    #[test]
+    fn preselected_effort_option_follows_live_then_meta_then_default_flag() {
+        let menu = serde_json::json!([
+            { "value": "xhigh" },
+            { "value": "high", "default": true },
+            { "value": "medium" },
+            { "value": "low" },
+        ]);
+        let preselected_id = |state: &ModelState| {
+            state
+                .preselected_effort_option_for(&acp::ModelId::new(Arc::from("m")))
+                .map(|option| option.id)
+        };
+
+        let mut state = state_with_meta(Some(serde_json::json!({
+            "supportsReasoningEffort": true,
+            "reasoningEffort": "medium",
+            "reasoningEfforts": menu.clone(),
+        })));
+        state.reasoning_effort = Some(ReasoningEffort::Low);
+        assert_eq!(Some("low".to_owned()), preselected_id(&state));
+
+        // Not the current model: the live effort no longer applies, so meta wins
+        state.current = None;
+        assert_eq!(Some("medium".to_owned()), preselected_id(&state));
+
+        let state = state_with_meta(Some(serde_json::json!({
+            "supportsReasoningEffort": true,
+            "reasoningEfforts": menu,
+        })));
+        assert_eq!(Some("high".to_owned()), preselected_id(&state));
+
+        // A meta level the menu does not offer is skipped, and without a default flag nothing is preselected
+        let state = state_with_meta(Some(serde_json::json!({
+            "supportsReasoningEffort": true,
+            "reasoningEffort": "none",
+            "reasoningEfforts": [{ "value": "xhigh" }, { "value": "high" }],
+        })));
+        assert_eq!(None, preselected_id(&state));
+
+        // Built-in fallback menu: its rows never carry `default`, so meta is the only source
+        let state = state_with_meta(Some(serde_json::json!({
+            "supportsReasoningEffort": true,
+            "reasoningEffort": "high",
+        })));
+        assert_eq!(Some("high".to_owned()), preselected_id(&state));
     }
 
     #[test]

@@ -23,6 +23,7 @@
 //! sandbox.apply(workspace).expect("sandbox apply failed");
 //! sandbox.install();
 //! ```
+#![deny(clippy::indexing_slicing)]
 mod allow_path;
 pub mod child_net;
 mod deny;
@@ -112,11 +113,9 @@ pub fn set_configured_profile(name: impl Into<String>) {
 pub fn configured_profile_name() -> Option<&'static str> {
     CONFIGURED_PROFILE.get().map(|s| s.as_str())
 }
-/// The non-`off` sandbox profile this process was **requested** with, if any.
-///
-/// This is the configured request, not a report that enforcement succeeded.
-/// `is_active()` can be false while the process is still confined (e.g. some Linux bwrap paths).
-/// A requested-but-unapplied profile already warns the user; keying on the request is the fail-closed choice.
+/// The non-`off` sandbox profile this process was requested with, if any. This is the configured request, not a report
+/// that enforcement succeeded. `is_active()` can be false while the process is still confined (e.g. some Linux bwrap
+/// paths). A requested-but-unapplied profile already warns the user; keying on the request is the fail-closed choice.
 pub fn requested_confinement_profile() -> Option<&'static str> {
     configured_profile_name().filter(|name| profile_confines(name))
 }
@@ -279,10 +278,9 @@ impl SandboxManager {
         &self.logger
     }
 }
-/// Build a bwrap command that re-execs the current process with `deny_write` paths mounted read-only.
-/// `deny_read` paths are bound over with an unreadable placeholder (EPERM on read).
-///
-/// Returns `None` if already inside bwrap. Caller should `cmd.exec()` the result.
+/// Build a bwrap command that re-execs the current process with `deny_write` paths mounted read-only. `deny_read` paths
+/// are bound over with an unreadable placeholder (EPERM on read). Returns `None` if already inside bwrap. Caller should
+/// `cmd.exec()` the result.
 pub fn bwrap_reexec_command(
     deny_write: &[&str],
     deny_read: &[&str],
@@ -391,10 +389,9 @@ fn chmod_000(path: &Path) -> Option<()> {
     std::fs::set_permissions(path, perms).ok()?;
     Some(())
 }
-/// Zero-permission placeholder (file or dir) under `grok_home` used by bwrap bind-over.
-///
-/// The placeholder name is suffixed with the current PID so concurrent grok processes don't race each other's create/remove/chmod on a shared path.
-/// A lost race could yield `None`, silently dropping the bind and failing open.
+/// Zero-permission placeholder (file or dir) under `grok_home` used by bwrap bind-over. The placeholder name is suffixed
+/// with the current PID so concurrent grok processes don't race each other's create/remove/chmod on a shared path. A lost
+/// race could yield `None`, silently dropping the bind and failing open.
 #[cfg(all(feature = "enforce", target_os = "linux"))]
 fn bwrap_blocked_placeholder(name: &str, want_dir: bool) -> Option<PathBuf> {
     use std::fs::OpenOptions;
@@ -438,12 +435,9 @@ fn is_devbox_based(profile: &ProfileName, config: &SandboxConfig) -> bool {
         _ => false,
     }
 }
-/// Whether kernel read-deny enforcement is required.
-/// This is the single source of truth, so callers (e.g. the shell's fail-closed startup path) cannot drift and silently fail open.
-///
-/// Decided directly from the profile config, NOT from the resolved/expanded deny set, which returns empty on failure.
-/// Keying "requires" on that empty-on-error result would silently downgrade to fail-open (Linux) when resolution hiccups.
-/// This intrinsic check stays fail-closed.
+/// Whether kernel read-deny enforcement is required. This is the single source of truth, so callers (e.g. the shell's
+/// fail-closed startup path) cannot drift and silently fail open. Keying "requires" on that empty-on-error result would
+/// silently downgrade to fail-open (Linux) when resolution hiccups. This intrinsic check stays fail-closed.
 #[cfg(all(feature = "enforce", unix))]
 pub fn requires_read_deny(profile: &ProfileName, workspace: &Path) -> bool {
     match profile {
@@ -494,10 +488,9 @@ fn requires_data_write_deny_for(
 fn data_path_requires_bind(path: &Path) -> bool {
     path.try_exists().unwrap_or(true)
 }
-/// Whether a `resolve_profile` failure must refuse startup.
-/// Any profile that enforces hook write-deny or its own deny list cannot proceed with an empty plan.
-/// The read-deny arm covers deny-carrying `extends = "devbox"` profiles, which the hook arm does not.
-/// Devbox resolution is infallible today, so that arm is defense in depth against a future fallible resolve step.
+/// Whether a `resolve_profile` failure must refuse startup. Any profile that enforces hook write-deny or its own deny
+/// list cannot proceed with an empty plan. Devbox resolution is infallible today, so that arm is defense in depth against
+/// a future fallible resolve step.
 #[cfg(all(feature = "enforce", target_os = "linux"))]
 fn resolve_failure_must_refuse(profile: &ProfileName, workspace: &Path) -> bool {
     requires_hook_write_deny(profile, workspace)
@@ -766,7 +759,7 @@ mod tests {
             .collect();
         let has_bind = args
             .windows(3)
-            .any(|w| w[0] == "--ro-bind" && w[2] == missing);
+            .any(|w| matches!(w, [flag, _, path] if flag == "--ro-bind" && path == missing));
         assert!(
             has_bind,
             "should bind-over non-existent deny_read paths, got args: {args:?}"
@@ -823,8 +816,9 @@ mod tests {
             plan.ancestor_rw_binds
         );
         for w in plan.ancestor_rw_binds.windows(2) {
+            let [a, b] = w else { continue };
             assert!(
-                w[0].components().count() <= w[1].components().count(),
+                a.components().count() <= b.components().count(),
                 "ancestors not rootward: {:?}",
                 plan.ancestor_rw_binds
             );
@@ -855,10 +849,14 @@ mod tests {
         let leaf_s = leaf.to_string_lossy().to_string();
         let anc_parent = args
             .windows(3)
-            .position(|w| w[0] == "--bind" && w[1] == parent_s && w[2] == parent_s);
+            .position(|w| {
+                matches!(w, [flag, src, dst] if flag == "--bind" && src == &parent_s && dst == &parent_s)
+            });
         let leaf_pos = args
             .windows(3)
-            .position(|w| w[0] == "--ro-bind" && w[1] == leaf_s && w[2] == leaf_s);
+            .position(|w| {
+                matches!(w, [flag, src, dst] if flag == "--ro-bind" && src == &leaf_s && dst == &leaf_s)
+            });
         assert!(anc_parent.is_some(), "expected RW bind of parent: {args:?}");
         assert!(leaf_pos.is_some(), "expected RO bind of leaf: {args:?}");
         assert!(
@@ -867,9 +865,9 @@ mod tests {
         );
         for anc in &plan.ancestor_rw_binds {
             let a = anc.to_string_lossy().to_string();
-            let pos = args
-                .windows(3)
-                .position(|w| w[0] == "--bind" && w[1] == a && w[2] == a);
+            let pos = args.windows(3).position(
+                |w| matches!(w, [flag, src, dst] if flag == "--bind" && src == &a && dst == &a),
+            );
             assert!(pos.is_some(), "missing RW bind for {a}: {args:?}");
             assert!(pos.unwrap() < leaf_pos.unwrap());
         }
@@ -1083,7 +1081,9 @@ mod tests {
             .to_string();
         let has_dir_bind = args
             .windows(3)
-            .any(|w| w[0] == "--ro-bind" && w[1] == blocked_dir && w[2] == dir_str);
+            .any(|w| {
+                matches!(w, [flag, src, dst] if flag == "--ro-bind" && src == &blocked_dir && dst == &dir_str)
+            });
         assert!(
             has_dir_bind,
             "existing directories should bind over sandbox-blocked-dir, got args: {args:?}"
@@ -1108,7 +1108,7 @@ mod tests {
         let deny_path = ws.join("secret.pem").to_string_lossy().to_string();
         assert!(
             args.windows(3)
-                .any(|w| w[0] == "--ro-bind" && w[2] == deny_path),
+                .any(|w| matches!(w, [flag, _, path] if flag == "--ro-bind" && path == &deny_path)),
             "expected read-deny bind for {deny_path}, got args: {args:?}"
         );
         if Path::new("/data").exists() {

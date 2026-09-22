@@ -9,7 +9,7 @@ Reference for key bindings in the Grok Build TUI. Bindings are built in and cann
 Grok has two input modes that control how you navigate the scrollback:
 
 - **Simple mode** (default): Arrow keys for navigation, `Shift+Arrow` for turn navigation, `Space` to focus the prompt, and any letter key auto-focuses the prompt.
-- **Vim mode** (opt-in): `j`/`k` for navigation, `H`/`L` for turn navigation, `J`/`K` for response navigation, `h`/`l` for fold, `e`/`E` for expand/collapse, and `i`/`Tab`/`Space` to focus the prompt.
+- **Vim mode** (opt-in): `j`/`k` for navigation, `H`/`L` for selected-turn navigation, `J`/`K` for viewport-top turn jumps (same as the timeline arrows), `h`/`l` for fold, `e`/`E` for expand/collapse, and `i`/`Tab`/`Space` to focus the prompt.
 
 Simple mode is active by default. To switch to Vim mode, set `vim_mode = true` under `[ui]` in `~/.grok/config.toml`, or toggle it at runtime with `/vim-mode`. See [Configuration](05-configuration.md) for details.
 
@@ -34,8 +34,8 @@ Move through conversation entries in the scrollback pane.
 | `k` | `Up` | Select previous entry |
 | `⇧L` | `Shift+Right` | Jump to next turn (user prompt) |
 | `⇧H` | `Shift+Left` | Jump to previous turn (user prompt) |
-| `⇧J` | | Jump to next assistant response |
-| `⇧K` | | Jump to previous assistant response |
+| `⇧J` | | Jump to next turn at viewport top |
+| `⇧K` | | Jump to previous turn at viewport top |
 | `g` | | Go to top of scrollback |
 | `⇧G` | | Go to bottom of scrollback |
 | `Ctrl+K` | | Scroll up one line (without changing selection) |
@@ -97,7 +97,7 @@ Switch between the prompt input and scrollback pane.
 | `Tab` | `Space` (and `i` in vim mode) | Scrollback focused with a card parked | Hand the keyboard back to the card (the bar's focus hint names it) |
 | `Enter` | | Prompt focused | Send the current prompt |
 
-**Esc is not a focus key.** It follows the cancel / clear / rewind semantics below. The mid-turn cancel is the only branch gated on `[ui].vim_mode` (scrollback nav); nothing depends on `[ui].simple_mode` (prompt editor). Overlays, modals, slash/file dropdowns, voice, search, and selection still steal Esc first.
+**Esc is not a focus key.** It follows the clear / rewind semantics below, and it never cancels a running turn (`Ctrl+C` does). Nothing about Esc depends on `[ui].vim_mode` (scrollback nav) or `[ui].simple_mode` (prompt editor). Overlays, modals, slash/file dropdowns, voice, search, and selection still steal Esc first.
 
 ## Blocking cards
 
@@ -160,14 +160,39 @@ The title always includes the MCP server name.
 | `Shift+X` | Dismiss the question (the agent continues without an answer) |
 | `Ctrl+F` | Fullscreen the card |
 
-The `/feedback` pane is the one exception to this table: the report box has no
-answers to walk, `Enter` sends the report, and `Esc` dismisses the pane. When a
-trace upload can be offered, `Enter` on the report first shows an upload
-question (`↑`/`↓` choose, `Enter` sends with your choice, `Esc` skips the
-upload and still sends the report).
+The `/feedback` form is the one exception to this table: its report box has no
+answers to walk, so it has its own keys (below).
 
 While typing a free-text answer, `Enter` submits and `Esc` returns to the
 answer rows; every other key goes to the text field.
+
+### `/feedback` form
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Switch between the Write and Drafts tabs |
+| `Esc` | Close the form (a focused label row or an open confirm is dismissed first) |
+
+Write tab:
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Send the report |
+| `Tab` | Focus the type/task/failure label rows (shown when a draft supplied them); `Tab` again returns to the report box |
+| `←` / `→` | Pick a value on the focused label row |
+
+Drafts tab:
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓`, `j` / `k` | Select a saved draft |
+| `Enter` | Load the selected draft into Write |
+| `d` | Delete the selected draft (confirm with `y`) |
+| `/` | Search the drafts |
+
+When a trace upload can be offered, `Enter` on the report first shows an upload
+question (`↑`/`↓` choose, `Enter` sends with your choice, `Esc` skips the
+upload and still sends the report).
 
 ### Permission prompt
 
@@ -199,18 +224,17 @@ sends it and `Esc` returns to the options.
 
 | State | Gesture | Effect |
 |--------|---------|--------|
-| Turn running, **minimal mode or vim scrollback mode off (the default)** | `Esc` | Cancel immediately (prompt or scrollback focused, even with a draft — the draft is **preserved**, unlike Ctrl+C's clear-first gesture). |
-| Turn running, **fullscreen vim mode** | `Esc` | Swallowed no-op (does **not** cancel). Use `Ctrl+C` (or palette / other cancel entry points). |
-| Turn cancelling | `Esc` | Re-sends cancel in **every** mode (retry if the first ack was lost). `Ctrl+C` in this state escalates toward quit. |
+| Turn running (every mode and pane) | `Esc` | Does **not** cancel. Shows a "Press Ctrl+c to cancel the turn" toast; the draft is untouched. Use `Ctrl+C` (or palette / other cancel entry points). |
+| Turn cancelling | `Esc` | Swallowed no-op. `Ctrl+C` in this state escalates toward quit. |
 | Idle + non-empty prompt (text or image chips), **prompt focused** | **2× `Esc` within 800ms** | Clear the prompt; the cleared draft is stashed (`Ctrl+S` or `Alt+S` restores it, images included) and its text ranks first in the `↑` history browse. First press shows “press again to clear”. |
 | Idle + empty prompt + conversation messages, **prompt or scrollback focused** | **2× `Esc` within 800ms** | Open the rewind picker (same as `/rewind`). First press is silent (no toast). |
 | Idle + empty + no messages, **or scrollback focused with a draft / moded (`!` `#`) composer / pending needs-input overlay / open history search** | `Esc` | Swallowed no-op (does not focus scrollback). Clear is prompt-pane only; rewind requires an empty Normal-mode composer, no pending overlay, and no open history search. Reading the scrollback never mutates your draft, your composer mode, a question awaiting an answer, or an in-progress search. |
 
-**Post-cancel grace:** for about a second after an Esc-triggered cancel, the idle rewind arm stays suppressed — mashing Esc to stop a turn cannot silently open the rewind picker. Only the rewind arm is held; every other Esc behavior is unaffected.
+**Mid-turn Esc grace:** for about a second after a mid-turn Esc, the idle rewind arm stays suppressed — mashing Esc at a turn that then ends cannot silently open the rewind picker. Only the rewind arm is held; every other Esc behavior is unaffected.
 
-**Steal-Esc (runs before mid-turn cancel / swallow and clear / rewind):** overlays, modals, slash/file/completion dropdowns, history search, scrollback search, text selection, link highlight, voice, and **Bash / Remember mode exit** when the prompt is empty (Esc leaves `!` / `#` mode and returns to the normal prompt, even while a turn is running). Bare `/feedback` opens the report pane; Esc dismisses it.
+**Steal-Esc (runs before the mid-turn hint and clear / rewind):** overlays, modals, slash/file/completion dropdowns, history search, scrollback search, text selection, link highlight, voice, and **Bash / Remember mode exit** when the prompt is empty (Esc leaves `!` / `#` mode and returns to the normal prompt, even while a turn is running). Bare `/feedback` opens the feedback form; Esc closes it.
 
-**Ctrl+C vs Esc:** with a non-empty draft while a turn is running, Ctrl+C clears the draft and keeps the turn; a second Ctrl+C on an empty prompt cancels. Esc cancels immediately and preserves the draft (in fullscreen vim mode it does not cancel; it only retries while already cancelling). Idle non-empty Ctrl+C clears in one press; Esc requires two presses within 800ms. The two clears differ in what they leave behind: `Esc Esc` stashes the draft, so `Ctrl+S` brings it back, while `Ctrl+C` discards it (its text is still in the `↑` history).
+**Ctrl+C vs Esc:** with a non-empty draft while a turn is running, Ctrl+C clears the draft and keeps the turn; a second Ctrl+C on an empty prompt cancels. Esc never cancels: mid-turn it only points you at Ctrl+C and leaves the draft alone. Idle non-empty Ctrl+C clears in one press; Esc requires two presses within 800ms. The two clears differ in what they leave behind: `Esc Esc` stashes the draft, so `Ctrl+S` brings it back, while `Ctrl+C` discards it (its text is still in the `↑` history).
 
 ---
 
@@ -226,7 +250,7 @@ Actions that affect the agent session, available from the agent screen.
 | `Ctrl+M` | Prompt focused | Toggle multiline input mode |
 | `Ctrl+C` | Agent screen | Cancel the current turn (or clear non-empty draft first; see Escape table) |
 | `Ctrl+O` | Agent screen | Toggle always-approve (YOLO) mode |
-| `F3` | Agent screen | Open the session picker (resume a previous session, same as `/resume`) |
+| `Ctrl+R` | Agent screen | Open the session picker (resume a previous session, same as `/resume`) |
 | `Ctrl+;` (alt: `Ctrl+'`) | Agent screen | Toggle the prompt queue pane (when non-empty). **Local macOS** VS Code family only: primary **`Ctrl+4`** (`;` / `'` still alts). SSH and non-Mac keep **`Ctrl+;`** / **`Ctrl+'`**. |
 | `Shift+Tab` | Prompt focused | Cycle mode (Normal → Plan → Auto (when enabled) → Always-approve) |
 | `Ctrl+B` | Agent screen | Send the running foreground command to the background |
@@ -239,6 +263,8 @@ Actions that affect the agent session, available from the agent screen.
 | `!` | Prompt focused | Enter shell mode (type `!` on an empty prompt) |
 | `Ctrl+.` (alt: `Ctrl+X`) | Agent screen | Open the keyboard shortcuts help |
 | `F2` (alt: `Ctrl+,` / `Cmd+,`) | Agent screen | Open the settings modal |
+
+**Note:** While a **subagent fullscreen view** is open, the composer is hidden. Root-only chords (`Ctrl+P`, `Ctrl+M`, `Ctrl+R`, `Ctrl+O`, `Ctrl+B`, settings, extensions, Shift+Tab) do nothing. `Ctrl+C` cancels the **child's** turn. `q` / `Esc` closes the view. `Ctrl+Q` still quits (`Ctrl+D` on VS Code family). See [Viewing Subagents in the TUI](16-subagents.md#fullscreen-framed-view-the-child-transcript).
 
 **Note:** `Ctrl+M` is context-dependent. When the prompt is focused, it toggles multiline input mode. Otherwise, it opens the model picker.
 
@@ -332,12 +358,12 @@ Bindings that only fire on the welcome screen (before any agent session is open)
 
 | Key | Action |
 |-----|--------|
-| `F3` | Resume session (open the session picker) |
+| `Ctrl+R` | Resume session (open the session picker) |
 | `Ctrl+W` | Open the New Worktree dialog (only inside a git repository) |
 | `Ctrl+I` | Import Claude settings (when available) |
 | `Ctrl+Shift+I` | Dismiss the Claude import row (when available) |
 
-`Ctrl+W`, `Ctrl+I`, and `Ctrl+Shift+I` are only active on the welcome screen. `F3` opens the session picker on both the welcome screen and inside an agent session (where it opens as a modal overlay, same as the `/resume` command). `Ctrl+S` is the prompt stash inside a session (it does nothing on the welcome screen, which has no draft to set aside). `Ctrl+Q` is the same global Quit binding documented above, not a welcome-specific handler.
+`Ctrl+W`, `Ctrl+I`, and `Ctrl+Shift+I` are only active on the welcome screen. `Ctrl+R` opens the session picker on both the welcome screen and inside an agent session (where it opens as a modal overlay, same as the `/resume` command). With `ui.mouse_reporting_toggle` enabled, `Ctrl+R` toggles mouse capture while the scrollback pane is focused; the picker is still on `Ctrl+R` from the prompt. `Ctrl+S` is the prompt stash inside a session (it does nothing on the welcome screen, which has no draft to set aside). `Ctrl+Q` is the same global Quit binding documented above, not a welcome-specific handler.
 
 ---
 
@@ -408,7 +434,7 @@ Focus prompt:     Space or any letter key (auto-focuses and types)
 ### When scrollback is focused (Vim mode)
 
 ```
-Navigation:       j/k (up/down)  H/L (prev/next turn)  K/J (prev/next response)  g/G (top/bottom)
+Navigation:       j/k (up/down)  H/L (prev/next turn)  K/J (viewport-top turn)  g/G (top/bottom)
 Scrolling:        Ctrl+J/K (line)  Ctrl+U/D (half page; D=Shift+D in VSCode)  PgUp/PgDn (page)
 Folding:          h/l (collapse/expand)  e (toggle)  E (all)
 Content:          y (copy)  Y (copy cmd)  Enter (fullscreen)
@@ -436,6 +462,24 @@ Clear (idle):     Esc Esc within 800ms (non-empty prompt)
 Rewind (idle):    Esc Esc within 800ms (empty prompt + messages)
 ```
 
+The composer footer shows the newline chord next to `Enter:send` (or
+`Enter:queue` while a turn is running) once the draft is non-empty
+(including `/btw` and other arg-required slash commands). Over SSH, old
+tmux, or terminals that cannot tell Shift+Enter from Enter, the footer
+prefers `Alt+Enter`.
+
+`Cmd+Enter` is not an advertised send or newline chord. Many terminals
+bind it to fullscreen, so `SUPER` is excluded from the Shift/Alt newline
+matcher and from the agent's bare-Enter send binding. When a terminal
+that speaks the Kitty keyboard protocol delivers `SUPER+Enter`, the
+composer still inserts a newline: the key misses send and lands in the
+textarea, which treats any Enter as a line break. Apple Terminal is a
+separate local path: CoreGraphics rescue treats held Cmd as modified
+Enter and inserts a newline on what arrives as bare Enter. Over SSH the
+Cmd/`SUPER` modifier never arrives (iTerm2 + tmux included), so the
+chord looks like bare Enter and sends. Remotely, use `Alt+Enter`, a
+trailing `\` then Enter, or `/ml`.
+
 With a selection active, typing / `Enter` / paste replace it, delete and
 word-kill chords delete just the selection, arrows collapse it to the
 matching edge (word/line moves continue from that edge), and `Esc` or `Tab`
@@ -461,7 +505,11 @@ focused the same chords jump between turns (see Navigation above).
 > prompt selects every character in the prompt buffer, including pasted
 > image chips. Image chips are always path-free (`[Image #N]`); the
 > filepath (when known) appears only in the image preview overlay on
-> hover or when the cursor is on/right after the chip.
+> hover or when the cursor is on/right after the chip. `[Image #N]` text
+> that comes back as plain text (Ctrl+K then Ctrl+Y, undo, a plain-text
+> paste) re-attaches as a chip while the composer still holds the image;
+> a placeholder for an image it no longer holds is sent as text with a
+> toast saying so.
 
 ### Always available
 

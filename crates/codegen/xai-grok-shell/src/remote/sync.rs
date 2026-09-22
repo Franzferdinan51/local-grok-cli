@@ -37,6 +37,7 @@ enum SyncMsg {
     /// Drop the cached title and manual flag so later flushes cannot re-advertise a pin the local summary no longer has.
     ClearTitle,
     SetModelId(String),
+    SetAgentId(String),
 }
 
 #[derive(Clone)]
@@ -45,6 +46,20 @@ pub struct RemoteSync {
 }
 
 impl RemoteSync {
+    #[cfg(test)]
+    pub(crate) fn test_identity_observer() -> (Self, mpsc::UnboundedReceiver<String>) {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (observed_tx, observed_rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(message) = rx.recv().await {
+                if let SyncMsg::SetAgentId(agent_id) = message {
+                    let _ = observed_tx.send(agent_id);
+                }
+            }
+        });
+        (RemoteSync { tx }, observed_rx)
+    }
+
     #[cfg(test)]
     pub(crate) fn test_observer() -> (Self, mpsc::UnboundedReceiver<acp::SessionNotification>) {
         let (tx, mut rx) = mpsc::unbounded_channel();
@@ -98,6 +113,10 @@ impl RemoteSync {
 
     pub(crate) fn set_model_id(&self, model_id: String) {
         let _ = self.tx.send(SyncMsg::SetModelId(model_id));
+    }
+
+    pub(crate) fn set_agent_id(&self, agent_id: String) {
+        let _ = self.tx.send(SyncMsg::SetAgentId(agent_id));
     }
 }
 
@@ -217,6 +236,16 @@ async fn sync_task(
                     .await
                 {
                     tracing::warn!(?e, "Writeback: failed to sync model_id to backend");
+                }
+            }
+            SyncMsg::SetAgentId(id) => {
+                metadata.agent_id = Some(id);
+                metadata.updated_at = Some(chrono::Utc::now().to_rfc3339());
+                if let Err(e) = client
+                    .save_session_data(&session_id, &[], Some(&metadata))
+                    .await
+                {
+                    tracing::warn!(?e, "Writeback: failed to sync agent_id to backend");
                 }
             }
         }

@@ -26,10 +26,8 @@ pub fn project_agent_dirs(cwd: Option<&Path>) -> (Vec<PathBuf>, Option<PathBuf>)
     (project_agent_dirs_in(&chain.dirs), chain.git_root)
 }
 
-/// Existing project agent dirs (`.grok/agents` / `.claude/agents`) under each dir of a cwd-to-git-root chain ([`crate::repo::RepoDirChain`]).
-///
-/// This is the only place that walks `PROJECT_AGENT_SUBDIRS`.
-/// The folder-trust detector (`repo_configs_present`) reuses it, so trust detection can never drift from discovery.
+/// Existing project agent dirs under each dir of a cwd-to-git-root chain.
+/// The only place that walks `PROJECT_AGENT_SUBDIRS`. The folder-trust detector reuses it so detection cannot drift from discovery.
 pub fn project_agent_dirs_in(chain_dirs: &[PathBuf]) -> Vec<PathBuf> {
     crate::repo::existing_subdirs_along(chain_dirs, PROJECT_AGENT_SUBDIRS)
 }
@@ -57,10 +55,8 @@ pub enum SubagentSource {
 
 // ── all_subagents ────────────────────────────────────────────────────
 
-/// Build the complete list of enabled subagents: built-ins, then discovered user agents, minus any toggled off via `[subagents.toggle]`.
-///
-/// Project-level agents shadow built-ins with the same name.
-/// User-level and bundled agents with built-in names are skipped, keeping `visible == callable`.
+/// Build the complete list of enabled subagents: built-ins, then discovered user agents, minus toggles.
+/// Project-level agents shadow built-ins. User-level and bundled agents with built-in names are skipped, keeping `visible == callable`.
 pub fn all_subagents(cwd: &Path, toggle: &HashMap<String, bool>) -> Vec<SubagentEntry> {
     let grok = xai_grok_config::user_grok_home();
     all_subagents_with_home(
@@ -112,15 +108,8 @@ fn merge_subagents(
         })
         .collect();
 
-    // 2. Merge in discovered user-defined agents.
-    //
-    // IMPORTANT: Only project-level agents can shadow built-ins
-    // This matches the runtime spawn precedence in by_name_in_cwd():
-    //   project > built-in > user > bundled
-    //
-    // A user-level ~/.grok/agents/explore.md does NOT shadow built-in explore
-    // at spawn time, so it must not shadow it in the visible list either.
-    // Otherwise the `visible == callable` guarantee breaks
+    // Only project-level agents can shadow built-ins. Matches spawn precedence: project > built-in > user > bundled.
+    // A user-level explore.md must not shadow built-in explore in the visible list, or `visible == callable` breaks.
     for def in discovered {
         if def.scope == AgentScope::BuiltIn {
             continue;
@@ -137,21 +126,24 @@ fn merge_subagents(
         }
 
         if let Some(pos) = entries.iter().position(|e| e.name == def.name) {
-            let should_replace = match &entries[pos].source {
-                SubagentSource::Builtin(_) => true,
-                SubagentSource::UserDefined { scope } => {
+            let should_replace = match entries.get(pos).map(|e| &e.source) {
+                Some(SubagentSource::Builtin(_)) => true,
+                Some(SubagentSource::UserDefined { scope }) => {
                     discovered_scope_priority(def.scope) > discovered_scope_priority(*scope)
                 }
+                None => false,
             };
             if should_replace {
                 let cs = source_from_agent_def(&def);
-                entries[pos] = SubagentEntry {
-                    name: def.name,
-                    description: def.description,
-                    source: SubagentSource::UserDefined { scope: def.scope },
-                    shadows_builtin: is_builtin_name,
-                    config_source: cs,
-                };
+                if let Some(slot) = entries.get_mut(pos) {
+                    *slot = SubagentEntry {
+                        name: def.name,
+                        description: def.description,
+                        source: SubagentSource::UserDefined { scope: def.scope },
+                        shadows_builtin: is_builtin_name,
+                        config_source: cs,
+                    };
+                }
             }
         } else {
             // This name is new, so append it after the built-ins
@@ -173,19 +165,9 @@ fn merge_subagents(
         .collect()
 }
 
-/// Discover all agent definitions from the filesystem.
-///
-/// Search order (highest priority first):
-/// 1. `.grok/agents/` walking from `cwd` up to repo root
-/// 2. `~/.grok/agents/` (user-level)
-/// 3. `~/.claude/agents/` (compat user-level)
-/// 4. `~/.grok/bundled/agents/` (bundled, lowest priority)
-///
-/// Deduplicates by name; higher-priority definitions win.
-/// User-level agent directories in priority order: user grok agents, `.claude`
-/// compat agents, then bundled. `.grok` dirs resolve from `grok_home`
-/// (GROK_HOME-aware) plus the legacy literal `~/.grok` when GROK_HOME points
-/// elsewhere; `.claude` resolves from `home`.
+/// Discover agent definitions from the filesystem. Deduplicates by name; higher priority wins.
+/// Order: project `.grok/agents/` (cwd up to repo root), user `~/.grok`, compat `~/.claude`, then bundled.
+/// `.grok` dirs resolve from `grok_home` plus legacy `~/.grok` when `GROK_HOME` points elsewhere.
 pub(crate) fn user_agent_dirs(
     home: Option<&Path>,
     grok_home: Option<&Path>,
@@ -345,9 +327,8 @@ pub struct PluginAgent {
 }
 
 /// Enumerate all agents provided by enabled plugins.
-///
 /// Loads every `*.md` in each enabled plugin's agent dirs.
-/// Untrusted plugins are parsed frontmatter-only (see [`load_plugin_agent_definition`]).
+/// Untrusted plugins are parsed frontmatter-only.
 pub fn plugin_agents(registry: &crate::plugins::PluginRegistry) -> Vec<PluginAgent> {
     let mut agents = Vec::new();
     for plugin in registry.enabled_plugins() {
@@ -493,7 +474,7 @@ fn by_name_in_cwd_with_plugins_and_home(
             }
         }
         if matches.len() == 1 {
-            let (plugin, agent_file) = &matches[0];
+            let (plugin, agent_file) = matches.first()?;
             if let Some(mut def) = load_plugin_agent_definition(plugin, agent_file) {
                 substitute_plugin_vars(&mut def, plugin);
                 return Some(def);
@@ -512,9 +493,8 @@ fn by_name_in_cwd_with_plugins_and_home(
 }
 
 /// Load one plugin-provided agent file, tagged with its owning plugin.
-///
-/// Untrusted plugins are parsed frontmatter-only so their prompt body never reaches the model before the plugin is trusted.
-/// A parse failure drops the agent from discovery entirely, so it is logged rather than swallowed.
+/// Untrusted plugins are parsed frontmatter-only so their prompt body never reaches the model before trust.
+/// A parse failure drops the agent from discovery, so it is logged rather than swallowed.
 fn load_plugin_agent_definition(
     plugin: &crate::plugins::LoadedPlugin,
     path: &Path,
@@ -845,7 +825,7 @@ mod tests {
 
         let defs = discover_with_home(tmp.path(), None, None);
         assert_eq!(defs.len(), 1);
-        assert_eq!(defs[0].name, "valid");
+        assert_eq!(defs.first().map(|d| d.name.as_str()), Some("valid"));
     }
 
     #[test]
@@ -859,7 +839,7 @@ mod tests {
 
         let defs = discover_with_home(tmp.path(), None, None);
         assert_eq!(defs.len(), 1);
-        assert_eq!(defs[0].name, "good");
+        assert_eq!(defs.first().map(|d| d.name.as_str()), Some("good"));
     }
 
     #[test]
@@ -902,8 +882,11 @@ mod tests {
 
         let defs = discover_with_home(&cwd, Some(&home), Some(&home.join(".grok")));
         assert_eq!(defs.len(), 1);
-        assert_eq!(defs[0].name, "bundled-agent");
-        assert_eq!(defs[0].scope, AgentScope::Bundled);
+        let Some(def) = defs.first() else {
+            panic!("expected bundled agent: {defs:?}");
+        };
+        assert_eq!(def.name, "bundled-agent");
+        assert_eq!(def.scope, AgentScope::Bundled);
     }
 
     #[test]
@@ -1198,12 +1181,15 @@ mod tests {
         let entries = merge_subagents(discovered, &HashMap::new());
         assert_eq!(entries.len(), 4);
         // Verify ordering: built-ins first, then user
-        assert!(matches!(&entries[0].source, SubagentSource::Builtin(_)));
-        assert!(matches!(&entries[1].source, SubagentSource::Builtin(_)));
-        assert!(matches!(&entries[2].source, SubagentSource::Builtin(_)));
-        assert_eq!(entries[3].name, "migration-helper");
+        let [e0, e1, e2, e3] = entries.as_slice() else {
+            panic!("expected four entries: {entries:?}");
+        };
+        assert!(matches!(&e0.source, SubagentSource::Builtin(_)));
+        assert!(matches!(&e1.source, SubagentSource::Builtin(_)));
+        assert!(matches!(&e2.source, SubagentSource::Builtin(_)));
+        assert_eq!(e3.name, "migration-helper");
         assert_eq!(
-            entries[3].source,
+            e3.source,
             SubagentSource::UserDefined {
                 scope: AgentScope::User
             }
@@ -1218,9 +1204,12 @@ mod tests {
             AgentScope::Bundled,
         )];
         let entries = merge_subagents(discovered, &HashMap::new());
-        assert_eq!(entries[3].name, "bundled-helper");
+        let Some(e3) = entries.get(3) else {
+            panic!("expected four entries: {entries:?}");
+        };
+        assert_eq!(e3.name, "bundled-helper");
         assert_eq!(
-            entries[3].source,
+            e3.source,
             SubagentSource::UserDefined {
                 scope: AgentScope::Bundled
             }
@@ -1262,10 +1251,10 @@ mod tests {
         let my_agent: Vec<_> = entries.iter().filter(|e| e.name == "my-agent").collect();
         assert_eq!(my_agent.len(), 1, "should dedup by name");
         assert_eq!(
-            my_agent[0].source,
-            SubagentSource::UserDefined {
+            my_agent.first().map(|e| &e.source),
+            Some(&SubagentSource::UserDefined {
                 scope: AgentScope::Project
-            }
+            })
         );
     }
 
