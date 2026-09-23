@@ -5,8 +5,9 @@
 models** on the Mac mini — no cloud models involved).
 
 The MCP surface exposes Grok Local's native ACP session lifecycle. The
-adapter spawns `grok-local agent --no-leader stdio` (binary override via
-`GROK_BIN`, default `grok`) and speaks ACP to it while presenting MCP
+adapter spawns the local `grok-local` binary (`~/.local/bin/grok-local` when
+present, else `grok`; override with `GROK_BIN`) as
+`grok-local agent --no-leader stdio` and speaks ACP to it while presenting MCP
 stdio to the caller. Agent-initiated permission requests are surfaced to the
 MCP caller and remain pending until an explicit
 `grok_local_permission_decide` answers them.
@@ -96,6 +97,10 @@ library; the loaded model is always acceptable).
   keeps configured servers), pending-request leak fix, stderr tails,
   `permission_mode`/`allow_subagents`/`allow_plan` on prompt,
   `grok_local_session_transcript`.
+- v0.5.1 (2026-09-22): default binary is now the LOCAL `grok-local`
+  (`~/.local/bin/grok-local`, LM Studio) instead of the cloud `grok` CLI —
+  Ryan's directive; the cloud CLI's xAI balance is exhausted (402 on every
+  turn). `GROK_BIN` still overrides explicitly.
 - v0.5.0 (speed stack, 2026-09-22): SystemOne effort dispatcher, LM Studio
   model awareness (never load/unload), `terminal` capability reverted to
   `False` (adapter doesn't implement client-RPC `terminal/create`),

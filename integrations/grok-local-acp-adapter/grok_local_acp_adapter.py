@@ -29,6 +29,11 @@ v0.4.0 changes:
 - New additive tool grok_local_session_transcript returns the retained
   session/update event history (last 500) for a persistent session.
 
+v0.5.1 changes (2026-09-22): default to the LOCAL grok-local binary
+  (LM Studio) instead of the cloud grok CLI -- Ryan's directive:
+  grok-local runs on LM Studio models; the cloud CLI's xAI balance is
+  exhausted (402 on every turn). GROK_BIN still overrides explicitly.
+
 v0.5.0 changes (speed stack):
 - SystemOne dispatcher: grok_local_systemone_route tool plus automatic
   per-prompt effort routing for grok_local_prompt (effort="auto", fail-open to
@@ -74,8 +79,12 @@ import urllib.error
 import urllib.request
 
 NAME = "grok-local-adapter"
-VERSION = "0.5.0"
-GROK = os.environ.get("GROK_BIN", "grok")
+VERSION = "0.5.1"
+# Ryan's directive 2026-09-22: grok-local runs on LM Studio models -- never
+# default to the cloud grok CLI (its xAI balance is exhausted, so every
+# turn 402s). GROK_BIN still overrides explicitly.
+_grok_local_bin = pathlib.Path.home() / ".local" / "bin" / "grok-local"
+GROK = os.environ.get("GROK_BIN") or (str(_grok_local_bin) if _grok_local_bin.exists() else "grok")
 DEFAULT_CWD = os.environ.get("GROK_ADAPTER_CWD", str(pathlib.Path.home()))
 MAX_TIMEOUT = int(os.environ.get("GROK_ADAPTER_MAX_TIMEOUT", "600"))
 
