@@ -320,7 +320,7 @@ async fn worktree_create_opens_session_at_worktree_subdirectory() {
     );
     let spec = WorktreeSpec::from_cli(Some("fix"), Some("origin/main")).unwrap();
 
-    let opened = open_session_in_new_worktree(&tx, &launch_cwd, &spec, None)
+    let opened = open_session_in_new_worktree(&tx, &launch_cwd, &spec, None, None)
         .await
         .unwrap();
 
@@ -365,10 +365,15 @@ async fn worktree_create_with_session_id_names_worktree_and_session() {
     );
     let sid = "2d3c6b3e-3d43-4f0a-9d2e-2b6d1b6a9c11";
 
-    let opened =
-        open_session_in_new_worktree(&tx, source.path(), &WorktreeSpec::default(), Some(sid))
-            .await
-            .unwrap();
+    let opened = open_session_in_new_worktree(
+        &tx,
+        source.path(),
+        &WorktreeSpec::default(),
+        Some(sid),
+        None,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(opened.session_id.0.as_ref(), sid);
     assert_eq!(opened.cwd, wt_root.path());
@@ -406,10 +411,11 @@ async fn worktree_create_failure_is_reported_before_any_session_opens() {
         ),
     ] {
         let (tx, log) = spawn_fake_agent(reply, Ok("never"));
-        let err = open_session_in_new_worktree(&tx, source.path(), &WorktreeSpec::default(), None)
-            .await
-            .unwrap_err()
-            .to_string();
+        let err =
+            open_session_in_new_worktree(&tx, source.path(), &WorktreeSpec::default(), None, None)
+                .await
+                .unwrap_err()
+                .to_string();
         assert!(err.contains("couldn't create worktree"), "{err}");
         assert!(err.contains(expect), "{err}");
         assert!(log.lock().unwrap().new_sessions.is_empty());
@@ -425,10 +431,11 @@ async fn worktree_create_then_session_failure_names_the_orphaned_worktree() {
         Err("agent refused"),
     );
 
-    let err = open_session_in_new_worktree(&tx, source.path(), &WorktreeSpec::default(), None)
-        .await
-        .unwrap_err()
-        .to_string();
+    let err =
+        open_session_in_new_worktree(&tx, source.path(), &WorktreeSpec::default(), None, None)
+            .await
+            .unwrap_err()
+            .to_string();
 
     assert!(err.contains("agent refused"), "{err}");
     assert!(err.contains(&wt_root.path().display().to_string()), "{err}");
@@ -452,7 +459,7 @@ async fn worktree_resume_loads_reported_session_without_re_restoring_code() {
     let spec = WorktreeSpec::from_cli(Some(""), Some("v1.2")).unwrap();
 
     let opened =
-        resume_session_in_new_worktree(&tx, source.path(), &spec, "orig", Some(true), false)
+        resume_session_in_new_worktree(&tx, source.path(), &spec, "orig", Some(true), false, None)
             .await
             .unwrap();
 
@@ -501,14 +508,16 @@ async fn worktree_resume_failure_carries_local_miss_hint_like_the_tui() {
     let (tx, _log) = spawn_fake_agent(serde_json::json!({"error": "archive unavailable"}), Ok("x"));
     let spec = WorktreeSpec::default();
 
-    let hinted = resume_session_in_new_worktree(&tx, source.path(), &spec, "my title", None, true)
-        .await
-        .unwrap_err()
-        .to_string();
-    let plain = resume_session_in_new_worktree(&tx, source.path(), &spec, "my title", None, false)
-        .await
-        .unwrap_err()
-        .to_string();
+    let hinted =
+        resume_session_in_new_worktree(&tx, source.path(), &spec, "my title", None, true, None)
+            .await
+            .unwrap_err()
+            .to_string();
+    let plain =
+        resume_session_in_new_worktree(&tx, source.path(), &spec, "my title", None, false, None)
+            .await
+            .unwrap_err()
+            .to_string();
 
     assert_eq!(
         plain,
@@ -799,4 +808,19 @@ fn handler_answers_ext_method_instead_of_dropping() {
     let parsed: AskUserQuestionExtResponse =
         serde_json::from_str(resp.0.get()).expect("typed wire reply");
     assert!(matches!(parsed, AskUserQuestionExtResponse::Cancelled));
+}
+
+#[test]
+fn headless_model_auto_never_becomes_a_switch_target() {
+    use super::headless_model_switch_target;
+    // `--model auto` is advisory only: no override, no switch, no unload.
+    assert_eq!(headless_model_switch_target(None), None);
+    assert_eq!(headless_model_switch_target(Some("auto")), None);
+    assert_eq!(headless_model_switch_target(Some("Auto")), None);
+    assert_eq!(headless_model_switch_target(Some("AUTO")), None);
+    // A named model keeps the pre-existing switch-target behavior.
+    assert_eq!(
+        headless_model_switch_target(Some("ornith-1.5-35b-a3b")),
+        Some("ornith-1.5-35b-a3b")
+    );
 }

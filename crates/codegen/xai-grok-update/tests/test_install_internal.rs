@@ -106,7 +106,10 @@ async fn install_internal_pinned_version_writes_binary_and_symlink() {
     let agent_link = home.join("bin").join("agent");
     assert!(agent_link.is_symlink(), "agent symlink created");
     let agent_target = std::fs::read_link(&agent_link).unwrap();
-    assert_eq!(agent_target, target, "agent and grok-local point at same target");
+    assert_eq!(
+        agent_target, target,
+        "agent and grok-local point at same target"
+    );
 }
 
 /// Regression: pre-existing `agent` symlink from a prior install must be swapped to the new version, not left stale (the original bug).

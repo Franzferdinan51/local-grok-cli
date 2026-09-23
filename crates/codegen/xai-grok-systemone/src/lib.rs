@@ -13,6 +13,16 @@
 //! - [`suggest_mcp_servers`] / [`prune_allowlist`]: route-driven MCP server
 //!   suggestions, with conservative opt-in pruning.
 //!
+//! # Thinking levels (v0.5.1)
+//!
+//! [`ThinkingMode`] is the user's thinking setting: `Auto` (the router picks
+//! the effort per task, and may reach `XHigh`/`Ultra` for heavy work) or a
+//! pinned level (`Off | Low | Medium | High | XHigh | Ultra`). [`ModelSelection`]
+//! (`Auto | Pinned`) is a fully independent control: the two never influence
+//! each other. The routing layer only *resolves* these settings to concrete
+//! values; all UI lives outside this crate (kept deliberately separate so the
+//! agent-flow work can build on this layer without touching UI code).
+//!
 //! # Fail-open contract
 //!
 //! Every public entry point is infallible from the caller's perspective: if the
@@ -29,7 +39,7 @@
 //!   (off by default).
 //! - `~/.grok-local/config.toml` `[systemone]` section: `enabled`, `urls`,
 //!   `timeout_secs`, `default_effort`, `auto_start_shim`, `shim_port`,
-//!   `prune_mcp_servers`, `prune_min_confidence`.
+//!   `prune_mcp_servers`, `prune_min_confidence`, `thinking`, `model_selection`.
 //!
 //! # Model switching
 //!
@@ -40,11 +50,15 @@
 pub mod config;
 pub mod route;
 pub mod shim;
+pub mod state;
 pub mod suggest;
 
 pub use config::SystemOneConfig;
-pub use route::{Effort, RouteDecision, RouteSource, Tier, route_for_task};
+pub use route::{
+    Effort, ModelSelection, RouteDecision, RouteSource, ThinkingMode, Tier, route_for_task,
+};
 pub use shim::{RouterStatus, ensure_router};
+pub use state::LastRoute;
 pub use suggest::{
     McpServerInfo, ServerSuggestion, inventory_from_config, prune_allowlist,
     suggest_and_maybe_prune, suggest_mcp_servers, suggestion_detail,

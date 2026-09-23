@@ -14,6 +14,7 @@ impl SessionActor {
             skip_prompt_rewrite,
             auto_compact_threshold_percent,
             system_prompt_label,
+            effort_explicit,
         } = switch;
         if let Some(current) = self.chat_state_handle.get_sampling_config().await
             && let Some(id) = current.conversation_group_id
@@ -96,6 +97,13 @@ impl SessionActor {
         self.invalidate_model_auth_memo();
         self.signals_handle()
             .record_model_usage(&sampling_config.model);
+        // An explicitly chosen effort (e.g. `/model <name> <effort>`) is owned
+        // by the thinking system: per-turn routing may update it under
+        // `ThinkingMode::Auto`. A preserved effort keeps its previous
+        // ownership (an explicit `--effort` stays hands-off).
+        if effort_explicit && let Some(effort) = sampling_config.reasoning_effort {
+            self.systemone_turn.lock().thinking_owned = Some(effort);
+        }
         if apply_prompt_override && !skip_prompt_rewrite {
             if self.state.lock().await.running_task.is_some() {
                 tracing::warn!(
@@ -231,8 +239,10 @@ impl SessionActor {
             cfg.model = routed;
         }
         cfg.reasoning_effort = Some(effort);
-        // The user chose explicitly: SystemOne routing stands down on effort.
-        self.note_systemone_effort_user_locked();
+        // The user chose explicitly: the thinking system owns this value, so
+        // per-turn routing may update it under `ThinkingMode::Auto`, and the
+        // pinned level applies under `ThinkingMode::Fixed`.
+        self.mark_systemone_thinking_owned(effort);
         let model_id = acp::ModelId::new(cfg.model.clone());
         self.chat_state_handle.update_sampling_config(cfg);
         let agent_name = self.agent.borrow().definition().name.clone();

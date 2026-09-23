@@ -145,8 +145,7 @@ async fn catalog_retry_recovers_after_endpoint_returns() {
             let mut buf = [0u8; 4096];
             let _ = stream.read(&mut buf);
             let response = if attempt == 0 {
-                "HTTP/1.1 500 boom\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                    .to_string()
+                "HTTP/1.1 500 boom\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string()
             } else {
                 let body = r#"{"data":[{"id":"retry-model","object":"model","type":"llm","state":"loaded"}]}"#;
                 format!(
@@ -423,7 +422,9 @@ async fn etag_refresh_is_bounded_and_single_flighted() {
 async fn first_catalog_wait_unblocks_on_fetch_and_skips_dead_dwell() {
     // Deployment auth: a fetch can succeed without a session, so the wait dwells regardless of any API key in the environment
     let mgr = cold_manager(
-        config_from_toml("[endpoints]\ndeployment_key = \"deploy-key\"\ncli_chat_proxy_base_url = \"https://cli-chat-proxy.grok.com/v1\""),
+        config_from_toml(
+            "[endpoints]\ndeployment_key = \"deploy-key\"\ncli_chat_proxy_base_url = \"https://cli-chat-proxy.grok.com/v1\"",
+        ),
         Arc::new(SlowEndpoint {
             catalog: make_prefetched(&["grok-4"]),
             delay: crate::http::STARTUP_FETCH_TIMEOUT / 2,
@@ -467,7 +468,9 @@ async fn first_catalog_wait_unblocks_on_fetch_and_skips_dead_dwell() {
 #[tokio::test(start_paused = true)]
 async fn first_catalog_wait_unblocks_on_failed_fetch() {
     let mgr = cold_manager(
-        config_from_toml("[endpoints]\ndeployment_key = \"deploy-key\"\ncli_chat_proxy_base_url = \"https://cli-chat-proxy.grok.com/v1\""),
+        config_from_toml(
+            "[endpoints]\ndeployment_key = \"deploy-key\"\ncli_chat_proxy_base_url = \"https://cli-chat-proxy.grok.com/v1\"",
+        ),
         Arc::new(FailingEndpoint),
     );
     let budget = crate::http::STARTUP_AUTH_REFRESH_TIMEOUT + crate::http::STARTUP_FETCH_TIMEOUT;
@@ -483,7 +486,9 @@ async fn first_catalog_wait_unblocks_on_failed_fetch() {
 #[tokio::test(start_paused = true)]
 async fn first_catalog_wait_is_bounded() {
     let mgr = cold_manager(
-        config_from_toml("[endpoints]\ndeployment_key = \"deploy-key\"\ncli_chat_proxy_base_url = \"https://cli-chat-proxy.grok.com/v1\""),
+        config_from_toml(
+            "[endpoints]\ndeployment_key = \"deploy-key\"\ncli_chat_proxy_base_url = \"https://cli-chat-proxy.grok.com/v1\"",
+        ),
         Arc::new(HangingEndpoint),
     );
     let budget = crate::http::STARTUP_AUTH_REFRESH_TIMEOUT + crate::http::STARTUP_FETCH_TIMEOUT;
@@ -514,7 +519,9 @@ async fn first_catalog_wait_skips_doomed_signed_out_fetch() {
 #[tokio::test(start_paused = true)]
 async fn first_catalog_wait_observes_inline_fetch() {
     let mgr = cold_manager(
-        config_from_toml("[endpoints]\ndeployment_key = \"deploy-key\"\ncli_chat_proxy_base_url = \"https://cli-chat-proxy.grok.com/v1\""),
+        config_from_toml(
+            "[endpoints]\ndeployment_key = \"deploy-key\"\ncli_chat_proxy_base_url = \"https://cli-chat-proxy.grok.com/v1\"",
+        ),
         Arc::new(SlowEndpoint {
             catalog: make_prefetched(&["grok-4"]),
             delay: crate::http::STARTUP_FETCH_TIMEOUT / 2,
@@ -531,7 +538,9 @@ async fn first_catalog_wait_observes_inline_fetch() {
 #[tokio::test(start_paused = true)]
 async fn new_fetch_attempt_supersedes_failed_latch() {
     let mgr = cold_manager(
-        config_from_toml("[endpoints]\ndeployment_key = \"deploy-key\"\ncli_chat_proxy_base_url = \"https://cli-chat-proxy.grok.com/v1\""),
+        config_from_toml(
+            "[endpoints]\ndeployment_key = \"deploy-key\"\ncli_chat_proxy_base_url = \"https://cli-chat-proxy.grok.com/v1\"",
+        ),
         Arc::new(FailingEndpoint),
     );
     mgr.fetch_and_apply_inner(/*remote_fetch_enabled*/ true)
@@ -1175,7 +1184,8 @@ async fn spawn_background_refresh_never_blocks_on_a_hanging_endpoint() {
             let _ = stream.read(&mut buf);
             // Slow server: the spawn call must return long before this responds.
             std::thread::sleep(std::time::Duration::from_secs(2));
-            let body = r#"{"data":[{"id":"bg-model","object":"model","type":"llm","state":"loaded"}]}"#;
+            let body =
+                r#"{"data":[{"id":"bg-model","object":"model","type":"llm","state":"loaded"}]}"#;
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 body.len(),

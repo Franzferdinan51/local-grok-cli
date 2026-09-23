@@ -2342,6 +2342,12 @@ impl AgentView {
             Some(eff) => format!("{model_id} ({eff})"),
             None => model_id,
         };
+        // SystemOne selectors: routed thinking + model selection, refreshed
+        // from the config file and the session's last-route record.
+        let model_label = format!(
+            "{model_label}{}",
+            crate::app::systemone_display::systemone_status_suffixes()
+        );
         let info = match &self.prompt_mode {
             PromptMode::Normal => PromptInfo {
                 model_name: &model_label,

@@ -2480,6 +2480,7 @@ async fn async_main(mut args: PagerArgs) -> Result<()> {
                 max_turns: args.max_turns,
                 permission_mode_flag: args.permission_mode_flag.clone(),
                 reasoning_effort: args.reasoning_effort.clone(),
+                thinking: args.thinking.clone(),
                 wait_for_background: !args.no_wait_for_background,
                 background_wait_timeout: std::time::Duration::from_secs(
                     args.background_wait_timeout_secs,
@@ -2613,7 +2614,10 @@ fn should_check_for_updates(no_auto_update_flag: bool) -> bool {
 fn current_executable_name() -> String {
     std::env::current_exe()
         .ok()
-        .and_then(|path| path.file_name().map(|name| name.to_string_lossy().into_owned()))
+        .and_then(|path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
         .unwrap_or_default()
 }
 

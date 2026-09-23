@@ -1024,6 +1024,56 @@ fn minimal_will_open_session(term_state: &TerminalState, app: &AppView) -> bool 
         && matches!(app.active_view, ActiveView::Welcome)
         && !app.is_zdr_blocked()
 }
+/// Persist SystemOne selector CLI flags to the `[systemone]` config section.
+///
+/// The pager and the agent session are separate processes; the config file is
+/// their shared source of truth (the session re-reads it every turn), so CLI
+/// flags land there rather than in an in-memory override. Same persistence
+/// precedent as `--model` (which persists the preferred model).
+///
+/// - `--model auto` → [`ModelSelection::Auto`]; a named `--model` → `Pinned`.
+///   Neither triggers a model switch on its own; auto is advisory only.
+/// - `--reasoning-effort`/`--effort` → pins thinking to that level (wins over
+///   `--thinking`, matching the live deferred-switch precedence).
+/// - `--thinking <level|auto>` → pins the level, or releases to auto routing.
+///
+/// Invalid tokens are left for the existing deferred-switch path to report;
+/// nothing here errors.
+fn persist_systemone_cli_selectors(args: &PagerArgs) {
+    use xai_grok_systemone::{Effort, ModelSelection, SystemOneConfig, ThinkingMode};
+
+    if let Some(raw) = args.model.as_deref() {
+        let selection = if raw.eq_ignore_ascii_case("auto") {
+            ModelSelection::Auto
+        } else {
+            ModelSelection::Pinned
+        };
+        if !SystemOneConfig::save_model_selection(selection) {
+            tracing::warn!("systemone: --model could not persist model selection");
+        }
+    }
+
+    if let Some(raw) = args.reasoning_effort.as_deref() {
+        // `--reasoning-effort`/`--effort` wins over `--thinking`.
+        if let Some(effort) = Effort::parse(raw)
+            && !SystemOneConfig::save_thinking(ThinkingMode::Fixed(effort))
+        {
+            tracing::warn!("systemone: --effort could not persist thinking level");
+        }
+    } else if let Some(raw) = args.thinking.as_deref() {
+        match ThinkingMode::parse(raw) {
+            Some(mode) => {
+                if !SystemOneConfig::save_thinking(mode) {
+                    tracing::warn!("systemone: --thinking could not persist thinking level");
+                }
+            }
+            None => tracing::warn!(
+                "--thinking: unknown level '{raw}'; expected off|low|medium|high|xhigh|ultra|auto"
+            ),
+        }
+    }
+}
+
 /// Run the main event loop until quit.
 /// Returns a [`RunResult`] with optional exit info (for the resume hint) and a flag for restarting the binary to pick up a downloaded update.
 /// The initial theme MUST come from `term_state.initial_theme`; see [`TerminalState::initial_theme`] for why.
@@ -1166,6 +1216,13 @@ pub(crate) async fn run(
         .as_deref()
         .map(agent_client_protocol::ModelId::new);
     app.cli_effort_token = args.reasoning_effort.clone();
+    // SystemOne selectors from CLI flags: persist to the `[systemone]` config
+    // section so the session (a separate process that re-reads the config
+    // every turn) picks them up. Precedence: `--reasoning-effort`/`--effort`
+    // pins thinking over `--thinking`; `--model auto` records automatic model
+    // selection (advisory only — the loaded model is never switched or
+    // unloaded), a named `--model` records a pinned model.
+    persist_systemone_cli_selectors(args);
     app.auth_use_oauth = args.oauth;
     app.show_resolved_model = remote_settings
         .as_ref()

@@ -55,9 +55,8 @@ fn env_local_model() -> Option<String> {
     None
 }
 
-static EFFECTIVE_DEFAULT: LazyLock<String> = LazyLock::new(|| {
-    env_local_model().unwrap_or_else(|| DEFAULTS.default.clone())
-});
+static EFFECTIVE_DEFAULT: LazyLock<String> =
+    LazyLock::new(|| env_local_model().unwrap_or_else(|| DEFAULTS.default.clone()));
 
 /// Primary model for coding tasks and general fallback.
 /// `LM_STUDIO_MODEL` / `GROK_MODEL` override the baked-in slug so the loaded
@@ -89,10 +88,7 @@ mod tests {
     fn baked_in_default_is_local_model() {
         assert_eq!(DEFAULTS.default, "local-model");
         assert!(
-            DEFAULTS
-                .models
-                .iter()
-                .any(|m| m.model == "local-model"),
+            DEFAULTS.models.iter().any(|m| m.model == "local-model"),
             "catalog must include local-model"
         );
     }

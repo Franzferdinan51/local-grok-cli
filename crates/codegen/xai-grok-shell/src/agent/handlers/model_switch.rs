@@ -232,6 +232,10 @@ pub(crate) async fn apply(
     };
     let model_unchanged = previous_model_id == model_id.0;
     let (tx, rx) = oneshot::channel();
+    // An explicitly chosen effort becomes owned by the thinking system (the
+    // session may update it under `ThinkingMode::Auto`); a preserved effort
+    // keeps its previous ownership.
+    let effort_explicit = matches!(effort, SwitchEffort::Set(Some(_)));
     let _ = handle.cmd_tx.send(SessionCommand::SetSessionModel {
         switch: SessionModelSwitch {
             sampling_config: model_sampling,
@@ -241,6 +245,7 @@ pub(crate) async fn apply(
             skip_prompt_rewrite: did_rebuild || model_unchanged,
             auto_compact_threshold_percent: new_threshold,
             system_prompt_label,
+            effort_explicit,
         },
         responds_to: tx,
     });

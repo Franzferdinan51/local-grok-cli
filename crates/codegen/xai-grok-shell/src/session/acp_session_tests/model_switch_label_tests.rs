@@ -38,6 +38,7 @@ async fn model_switch_relabels_live_agent_and_system_head() {
                     skip_prompt_rewrite: false,
                     auto_compact_threshold_percent: 85,
                     system_prompt_label: SWITCH_TARGET_LABEL.to_owned(),
+                    effort_explicit: false,
                 })
                 .await
                 .expect("model switch succeeds");

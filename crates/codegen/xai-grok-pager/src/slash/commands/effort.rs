@@ -1,6 +1,7 @@
 //! `/effort`: set reasoning effort on the current model without re-picking it.
 //!
 //! Thin wrapper over `Action::SwitchModel` with the session's current model id and the chosen effort (same wire path as `/model <name> <effort>`).
+//! Also pins the SystemOne thinking level persistently — `/effort` is the legacy spelling of `/thinking <level>`.
 
 use crate::app::actions::Action;
 use crate::slash::command::{
@@ -64,10 +65,23 @@ impl SlashCommand for EffortCommand {
 
         // Same gate-first policy as the CLI (`--effort`) and headless.
         match ctx.models.resolve_effort_for_model(&model_id, trimmed) {
-            Ok(effort) => CommandResult::Action(Action::SwitchModel {
-                model_id,
-                effort: Some(effort),
-            }),
+            Ok(effort) => {
+                // Pin the thinking level persistently: `/effort` is the
+                // legacy spelling of `/thinking <level>`. The live switch
+                // still applies even if the config write fails (fail-open).
+                let mode = xai_grok_systemone::ThinkingMode::Fixed(
+                    xai_grok_systemone::Effort::from_reasoning(effort),
+                );
+                if !xai_grok_systemone::SystemOneConfig::save_thinking(mode) {
+                    tracing::warn!(
+                        "systemone: /effort could not persist thinking level; live switch still applied"
+                    );
+                }
+                CommandResult::Action(Action::SwitchModel {
+                    model_id,
+                    effort: Some(effort),
+                })
+            }
             Err(err) => CommandResult::Error(err.message()),
         }
     }

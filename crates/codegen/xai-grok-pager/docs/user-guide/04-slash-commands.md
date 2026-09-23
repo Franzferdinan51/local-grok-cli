@@ -98,19 +98,35 @@ Rename the current session. Alias: `/title`.
 
 ## Model and Mode
 
-### `/model <name>`
+### `/model <name|auto>`
 
-Switch models. Accepts a model ID or display name (case-insensitive), and for reasoning models you can add an effort level as a second argument. Alias: `/m`.
+Switch models, or pick how models are chosen. Accepts a model ID or display name (case-insensitive). Alias: `/m`.
+
+- `/model <name>` pins the model — nothing is ever unloaded or swapped behind your back.
+- `/model auto` hands model choice to SystemOne: the router's pick is shown per task as an advisory, and your loaded model stays put.
+- `/model <name> <effort>` is the explicit combined spelling that pins the model **and** the thinking level at once.
+
+Picking a reasoning model from the autocomplete opens a second step whose first row, **(model only)**, pins just the model and leaves thinking on its own setting — choosing a model never silently changes your thinking level. Thinking is controlled by `/thinking` (below).
 
 ```
 /model grok-4.6
 /model Grok 4.6
+/model auto
 /model Reasoning X high
+```
+
+### `/thinking <level|auto>`
+
+Pin the reasoning level or hand it to SystemOne — fully independent of which model is selected. Levels: `off`, `low`, `medium`, `high`, `xhigh`, `ultra`, `auto` (default). Under `auto` the router picks the effort per task and may reach `xhigh`/`ultra` for heavy work; a pinned level makes the router stand down on effort and that level is applied instead.
+
+```
+/thinking high
+/thinking auto
 ```
 
 ### `/effort <level>`
 
-Set reasoning effort on the **current** model without reselecting it. Levels are `low`, `medium`, `high`, and `xhigh`, and it only applies when the active model supports reasoning effort.
+Set reasoning effort on the **current** model without reselecting it. Levels are `low`, `medium`, `high`, and `xhigh`, and it only applies when the active model supports reasoning effort. It also persists the matching thinking level, so `/thinking` shows it.
 
 ```
 /effort high

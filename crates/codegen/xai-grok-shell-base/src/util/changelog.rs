@@ -369,15 +369,12 @@ mod tests {
         let merged = merge_with_local(build);
         let entries = merged.entries.expect("merged entries");
         assert!(
-            entries
-                .iter()
-                .any(|e| e.description.contains("Grok Local")),
+            entries.iter().any(|e| e.description.contains("Grok Local")),
             "local notes must appear"
         );
         assert!(
-            entries
-                .iter()
-                .any(|e| e.description.contains("Grok Build") && e.description.contains("A grok-build fix")),
+            entries.iter().any(|e| e.description.contains("Grok Build")
+                && e.description.contains("A grok-build fix")),
             "grok-build notes must appear: {entries:?}"
         );
         let md = merged.markdown.expect("merged markdown");

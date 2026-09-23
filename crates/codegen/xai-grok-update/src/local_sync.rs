@@ -13,8 +13,7 @@ use tokio::process::Command;
 
 const UPSTREAM_SOURCE_REV_URL: &str =
     "https://raw.githubusercontent.com/xai-org/grok-build/main/SOURCE_REV";
-const UPSTREAM_VERSION_TOML_URL: &str =
-    "https://raw.githubusercontent.com/xai-org/grok-build/main/crates/codegen/xai-grok-version/Cargo.toml";
+const UPSTREAM_VERSION_TOML_URL: &str = "https://raw.githubusercontent.com/xai-org/grok-build/main/crates/codegen/xai-grok-version/Cargo.toml";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -146,8 +145,13 @@ pub fn print_overlay_status(status: &OverlayUpdateStatus, json: bool) -> Result<
         status.latest_source_rev.as_deref(),
     ) {
         (Some(latest), Some(rev)) if status.update_available => {
-            println!("A new grok-build snapshot is available: {} -> {latest} ({rev})", status.grok_build);
-            println!("Run `grok-local update --upstream` in the source tree to overlay-merge without replacing fork patches.");
+            println!(
+                "A new grok-build snapshot is available: {} -> {latest} ({rev})",
+                status.grok_build
+            );
+            println!(
+                "Run `grok-local update --upstream` in the source tree to overlay-merge without replacing fork patches."
+            );
         }
         (Some(latest), Some(_)) => {
             println!("Already on latest grok-build {latest} (overlay merge).");

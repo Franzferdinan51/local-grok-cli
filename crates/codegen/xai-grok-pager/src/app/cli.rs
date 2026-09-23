@@ -293,7 +293,7 @@ pub struct AgentArgs {
         default_value = "false"
     )]
     pub reauthenticate: bool,
-    /// Model ID to use
+    /// Model ID to use ('auto' lets SystemOne pick per task, advisory only)
     #[arg(short = 'm', long = "model", value_name = "MODEL")]
     pub model: Option<String>,
     /// Reasoning effort for reasoning models
@@ -304,6 +304,11 @@ pub struct AgentArgs {
         overrides_with = "reasoning_effort"
     )]
     pub reasoning_effort: Option<String>,
+    /// SystemOne thinking level: off|low|medium|high|xhigh|ultra|auto.
+    /// Pins the level (same as /thinking); auto lets the router choose per task.
+    /// Persists to the [systemone] config section. `--reasoning-effort`/`--effort` wins over this.
+    #[arg(long = "thinking", value_name = "LEVEL")]
+    pub thinking: Option<String>,
     /// Auto-approve all tool executions
     #[arg(long = "always-approve", alias = "yolo")]
     pub yolo: bool,
@@ -542,7 +547,7 @@ pub struct PagerArgs {
     /// Example: --json-schema '{"type":"object","properties":{"name":{"type":"string"}}}'
     #[clap(long = "json-schema", value_name = "SCHEMA")]
     pub json_schema: Option<String>,
-    /// Model ID to use.
+    /// Model ID to use ('auto' lets SystemOne pick per task, advisory only).
     #[clap(short = 'm', long = "model", value_name = "MODEL")]
     pub model: Option<String>,
     /// Reasoning effort for reasoning models
@@ -553,6 +558,10 @@ pub struct PagerArgs {
         overrides_with = "reasoning_effort"
     )]
     pub reasoning_effort: Option<String>,
+    /// SystemOne thinking level: off|low|medium|high|xhigh|ultra|auto.
+    /// Session-scoped (does not persist). `--reasoning-effort`/`--effort` wins over this.
+    #[clap(long = "thinking", value_name = "LEVEL")]
+    pub thinking: Option<String>,
     /// Extra rules to append to the system prompt.
     #[clap(long = "rules", alias = "append-system-prompt")]
     pub rules: Option<String>,
@@ -1476,6 +1485,16 @@ mod tests {
         let alias =
             PagerArgs::try_parse_from(["grok", "--effort", "high"]).expect("--effort alias parses");
         assert_eq!(alias.reasoning_effort.as_deref(), Some("high"));
+    }
+    #[test]
+    fn thinking_flag_parses_independently_of_effort() {
+        let args =
+            PagerArgs::try_parse_from(["grok", "--thinking", "ultra"]).expect("--thinking parses");
+        assert_eq!(args.thinking.as_deref(), Some("ultra"));
+        assert_eq!(args.reasoning_effort, None);
+        let headless = PagerArgs::try_parse_from(["grok", "--thinking", "auto", "-p", "hi"])
+            .expect("headless --thinking parses");
+        assert_eq!(headless.thinking.as_deref(), Some("auto"));
     }
     #[test]
     fn reasoning_effort_accepts_max_and_remapped_ids() {

@@ -137,7 +137,9 @@ mod tests {
         assert_eq!(
             resolved,
             Some((
-                dunce::canonicalize(tmp.path()).unwrap().join(DEFAULT_GROK_DIRNAME),
+                dunce::canonicalize(tmp.path())
+                    .unwrap()
+                    .join(DEFAULT_GROK_DIRNAME),
                 GrokHomeSource::HomeDefault
             ))
         );

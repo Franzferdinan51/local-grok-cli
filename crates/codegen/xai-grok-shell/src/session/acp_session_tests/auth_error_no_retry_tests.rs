@@ -1497,6 +1497,7 @@ async fn model_switch_preserves_existing_conversation_group() {
                     skip_prompt_rewrite: true,
                     auto_compact_threshold_percent: 85,
                     system_prompt_label: xai_grok_agent::DEFAULT_SYSTEM_PROMPT_LABEL.to_owned(),
+                    effort_explicit: false,
                 })
                 .await
                 .expect("model switch succeeds");
@@ -1570,6 +1571,7 @@ async fn set_session_model_invalidates_byok_memo_for_same_model_id() {
                     skip_prompt_rewrite: true,
                     auto_compact_threshold_percent: 85,
                     system_prompt_label: xai_grok_agent::DEFAULT_SYSTEM_PROMPT_LABEL.to_owned(),
+                    effort_explicit: false,
                 })
                 .await;
 
@@ -1656,6 +1658,7 @@ async fn switch_to_first_party_model_drops_minted_provider_token() {
                     skip_prompt_rewrite: true,
                     auto_compact_threshold_percent: 85,
                     system_prompt_label: xai_grok_agent::DEFAULT_SYSTEM_PROMPT_LABEL.to_owned(),
+                    effort_explicit: false,
                 })
                 .await;
 

@@ -58,6 +58,7 @@ pub mod settings_cmd;
 pub mod share;
 pub mod tasks;
 pub mod theme;
+pub mod thinking;
 pub mod timeline;
 pub mod timestamps;
 pub mod toggle_mouse_reporting;
@@ -87,6 +88,7 @@ pub fn builtin_commands() -> Vec<Arc<dyn SlashCommand>> {
         Arc::new(new::NewCommand),
         // Per turn.
         Arc::new(effort::EffortCommand),
+        Arc::new(thinking::ThinkingCommand),
         Arc::new(model::ModelCommand),
         Arc::new(context::ContextCommand),
         Arc::new(compact::CompactCommand),
@@ -450,7 +452,14 @@ mod tests {
         };
         let cmd = model::ModelCommand;
         let items = cmd.suggest_args(&ctx, "").expect("should have suggestions");
-        assert_eq!(items.len(), 2);
+        // Two sample models plus the leading Auto row: picking Auto clears
+        // the pinned model without touching the thinking selector.
+        assert_eq!(items.len(), 3);
+        assert!(
+            items
+                .iter()
+                .any(|i| i.display.starts_with("Auto (SystemOne)") && i.insert_text == "auto")
+        );
         assert!(
             items
                 .iter()

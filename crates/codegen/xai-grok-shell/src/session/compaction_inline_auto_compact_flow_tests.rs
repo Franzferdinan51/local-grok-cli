@@ -868,6 +868,7 @@ async fn family_switch_compacts_lossy_with_new_model() {
                     skip_prompt_rewrite: true,
                     auto_compact_threshold_percent: 85,
                     system_prompt_label: xai_grok_agent::DEFAULT_SYSTEM_PROMPT_LABEL.to_owned(),
+                    effort_explicit: false,
                 })
                 .await
                 .expect("compact failure is log-only; the switch must succeed");

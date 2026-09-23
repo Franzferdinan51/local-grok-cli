@@ -325,6 +325,11 @@ pub struct SessionModelSwitch {
     /// The session actor stores this on `compaction.threshold_percent` (which is `Cell<u8>` so it can update without `&mut self`).
     pub auto_compact_threshold_percent: u8,
     pub system_prompt_label: String,
+    /// True when the switch explicitly set a reasoning effort (e.g.
+    /// `/model <name> <effort>`). The session then marks that effort as owned
+    /// by the thinking system so SystemOne per-turn routing may update it
+    /// under `ThinkingMode::Auto`. `false` for effort-preserving switches.
+    pub effort_explicit: bool,
 }
 #[derive(Debug, Clone, Default)]
 pub struct CurrentModel {

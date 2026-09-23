@@ -225,7 +225,10 @@ pub async fn rollback_fork_release() -> Result<()> {
     let _lock = InstallLock::acquire(&dest)?;
     let previous = dest.with_extension("previous");
     if !previous.is_file() {
-        bail!("no previous grok-local backup found at {}", previous.display());
+        bail!(
+            "no previous grok-local backup found at {}",
+            previous.display()
+        );
     }
     let failed = dest.with_extension(format!("failed-{}", std::process::id()));
     if dest.exists() {

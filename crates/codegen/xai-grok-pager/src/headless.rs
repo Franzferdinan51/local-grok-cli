@@ -82,6 +82,11 @@ pub struct HeadlessOptions {
     pub permission_mode_flag: Option<String>,
     /// Effort token (`--reasoning-effort` / `--effort`); resolved like `/effort` after models load.
     pub reasoning_effort: Option<String>,
+    /// Thinking level (`--thinking off|low|medium|high|xhigh|ultra|auto`).
+    /// `--reasoning-effort`/`--effort` wins over this; `auto` means the routed
+    /// effort. When neither is set, the `[systemone] thinking` config mode
+    /// applies (auto by default).
+    pub thinking: Option<String>,
     /// Wait for background tasks to report `task_completed` before exiting (default true).
     pub wait_for_background: bool,
     /// Max time to wait for background work to finish after the first turn ends.
@@ -869,30 +874,73 @@ pub async fn run_single_turn(
     let systemone_cfg = xai_grok_systemone::SystemOneConfig::load();
     let mut systemone_route: Option<xai_grok_systemone::RouteDecision> = None;
     let mut systemone_prune: Option<Vec<String>> = None;
+    let mut router_status: Option<xai_grok_systemone::RouterStatus> = None;
     if systemone_cfg.routing_active() {
-        let router_status = xai_grok_systemone::ensure_router(&systemone_cfg).await;
+        router_status = Some(xai_grok_systemone::ensure_router(&systemone_cfg).await);
         let task_text = headless_prompt_text(prompt.as_ref());
         let mut decision =
             xai_grok_systemone::route_for_task(&task_text, "prompt", &systemone_cfg).await;
         let (_suggestions, prune) =
             xai_grok_systemone::suggest_and_maybe_prune(&task_text, &mut decision, &systemone_cfg);
-        eprint_line(&decision.evidence_line(router_status));
         systemone_prune = prune;
         systemone_route = Some(decision);
     }
+    // Thinking resolution, independent of model selection:
+    // `--reasoning-effort`/`--effort` > `--thinking` > config-file
+    // `[systemone] thinking` mode (auto by default = the routed effort).
+    // Works with routing disabled too: a pinned `--thinking` level applies
+    // even when the router is off; auto with no route leaves the default.
+    let thinking_mode = options
+        .thinking
+        .as_deref()
+        .and_then(xai_grok_systemone::ThinkingMode::parse)
+        .unwrap_or(systemone_cfg.thinking);
+    if options.thinking.as_deref().is_some()
+        && options
+            .thinking
+            .as_deref()
+            .and_then(xai_grok_systemone::ThinkingMode::parse)
+            .is_none()
+    {
+        eprint_line(
+            "warning: --thinking: unknown level; expected off|low|medium|high|xhigh|ultra|auto",
+        );
+    }
+    let model_selection = if options
+        .model
+        .as_deref()
+        .is_some_and(|m| m.eq_ignore_ascii_case("auto"))
+    {
+        xai_grok_systemone::ModelSelection::Auto
+    } else {
+        systemone_cfg.model_selection
+    };
+    if let Some(ref decision) = systemone_route {
+        let thinking_applied = thinking_mode.resolve(decision);
+        eprint_line(&decision.evidence_line_with(
+            router_status.unwrap_or(xai_grok_systemone::RouterStatus::Unavailable),
+            decision.effort,
+            thinking_applied,
+            model_selection,
+        ));
+        agent_config.reasoning_effort_override = Some(thinking_applied.reasoning_effort());
+    } else if let xai_grok_systemone::ThinkingMode::Fixed(effort) = thinking_mode {
+        // Router off (or failed closed): a pinned thinking level still applies.
+        agent_config.reasoning_effort_override = Some(effort.reasoning_effort());
+    }
+    // Explicit `--reasoning-effort`/`--effort` wins over everything the router
+    // (or `--thinking`) chose — the conservative explicit-wins rule.
     if let Some(ref token) = options.reasoning_effort
         && let Some(effort) = parse_canonical_effort_token(token)
     {
         agent_config.reasoning_effort_override = Some(effort);
     }
-    // Routed effort fills the gap only when the user did not set it explicitly.
-    if options.reasoning_effort.is_none()
-        && let Some(ref decision) = systemone_route
-    {
-        agent_config.reasoning_effort_override = Some(decision.effort.reasoning_effort());
-    }
-    if let Some(ref model) = options.model {
-        agent_config.default_model_override = Some(model.clone());
+    // `--model auto`: automatic model selection. The router's pick is advisory
+    // only — the default model is left untouched, nothing is switched or
+    // unloaded. A named `--model` behaves as before.
+    let model_for_switch = headless_model_switch_target(options.model.as_deref());
+    if let Some(model) = model_for_switch {
+        agent_config.default_model_override = Some(model.to_string());
     }
     agent_config.resolve_runtime_fields(&xai_grok_shell::agent::config::RuntimeResolutionContext {
         raw_config: &raw_config,
@@ -1210,9 +1258,9 @@ pub async fn run_single_turn(
             None => true,
         }
     };
-    let needs_fresh_catalog = options
-        .model
-        .as_deref()
+    // `--model auto` never triggers a catalog refresh or a model switch:
+    // the router's pick is advisory only.
+    let needs_fresh_catalog = model_for_switch
         .is_some_and(|m| session_models.resolve_by_name_or_id(m).is_none())
         || options
             .reasoning_effort
@@ -1233,7 +1281,7 @@ pub async fn run_single_turn(
         &acp_tx,
         &session_id,
         &session_models,
-        options.model.as_deref(),
+        model_for_switch,
         options.reasoning_effort.as_deref(),
     )
     .await
@@ -1904,6 +1952,16 @@ fn handle_headless_acp_message(
         _ => {}
     }
 }
+
+/// Resolve a headless `--model` value to a model-switch target.
+///
+/// A named model becomes a `default_model_override` (the pre-existing
+/// behavior). `--model auto` is advisory-only: the router's pick never
+/// switches or unloads the default model, so it resolves to no target.
+fn headless_model_switch_target(model: Option<&str>) -> Option<&str> {
+    model.filter(|m| !m.eq_ignore_ascii_case("auto"))
+}
+
 #[cfg(test)]
 #[path = "headless/background_lifecycle_tests.rs"]
 mod background_lifecycle_tests;

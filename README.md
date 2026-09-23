@@ -58,7 +58,7 @@ version and the grok-build version that overlay was applied on.
 
 ```sh
 grok-local --version
-# grok-local 0.5.0 (<git sha>)
+# grok-local 0.5.1 (<git sha>)
 # grok-build 1.0.38 (<SOURCE_REV>)
 ```
 
@@ -172,15 +172,23 @@ The user guide ships with the pager crate:
 — getting started, keyboard shortcuts, slash commands, configuration, theming,
 MCP servers, skills, plugins, hooks, headless mode, sandboxing, and more.
 
-## SystemOne native routing (v0.5.0)
+## SystemOne native routing (v0.5.1)
+
+Two independent selectors, settable per session or per CLI invocation:
+
+| Selector | Choices | Default |
+|---|---|---|
+| Model | `auto` or a pinned model | pinned |
+| Thinking | `off` / `low` / `medium` / `high` / `xhigh` / `ultra` / `auto` | `auto` |
 
 Every task — `grok-local --single` headless prompts and interactive/ACP
 per-turn prompts alike — routes through the local **SystemOne** router
 (`http://127.0.0.1:8765`, the `knowledgator/gliclass-edge-v3.0` classifier)
-**natively** — no external adapter to wire, no config entries to add, no shim
-to launch by hand. If the router is not running, the binary starts the
-installed shim itself (detached; the model is already in the HuggingFace
-cache, so cold start is seconds).
+**natively**: the router client is the embedded `xai-grok-systemone` Rust
+crate, compiled into this binary — no external adapter to wire, no config
+entries to add, no shim to launch by hand. If the router is not running, the
+binary starts the installed shim itself (detached; the model is already in
+the HuggingFace cache, so cold start is seconds).
 
 The returned tier maps to a reasoning effort and loop cap
 (`edge`/`economy` → low / 4 turns, `balanced` → medium / 6, `heavy` →
@@ -196,6 +204,14 @@ Fail-open always: a router outage or error leaves the session exactly as if
 routing did not exist. One greppable `systemone: …` line on stderr proves
 what routing did (source, tier, effort, max_turns, confidence).
 
+Under `thinking=auto` the router picks the effort per task and may reach
+`xhigh`/`ultra` for heavy work; a pinned level (`/thinking high`,
+`--thinking low`) makes the router stand down on effort and that level is
+applied instead. Under `model=auto` (`/model auto`, `--model auto`) the
+router's model pick is advisory only — it is logged and shown in the status
+line, never acted on. This binary never unloads or switches your loaded
+model.
+
 Kill-switches (env wins over `~/.grok-local/config.toml` `[systemone]`):
 
 | Env | Effect |
@@ -204,8 +220,10 @@ Kill-switches (env wins over `~/.grok-local/config.toml` `[systemone]`):
 | `GROK_LOCAL_SYSTEMONE_NO_AUTOSTART=1` | Probe only; never start the shim |
 | `GROK_LOCAL_SYSTEMONE_PRUNE=1` | Opt in to conservative MCP pruning |
 
-The router's `model_id` is advisory only — it is logged, never acted on.
-This binary never unloads or switches your loaded model.
+The selectors are also settable via env: `GROK_LOCAL_SYSTEMONE_THINKING`
+(`off|low|medium|high|xhigh|ultra|auto`) and
+`GROK_LOCAL_SYSTEMONE_MODEL_SELECTION` (`auto|pinned`) — env wins over the
+config file, same precedence as the kill-switches above.
 
 ## Repository layout
 

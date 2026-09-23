@@ -6,12 +6,21 @@
 //!
 //! - tier -> caps: `edge`/`economy` -> low, `balanced` -> medium, `heavy` -> high.
 //! - An explicit `effort` in the shim response wins over the tier caps
-//!   ("shim knows best").
+//!   ("shim knows best") — including the extended `xhigh`/`ultra` levels.
 //! - Unknown tiers fall back to the high tier's caps (fail-open).
 //! - ANY error/timeout -> fail-open decision from config defaults.
 //!
 //! The `model_id` in the response is advisory only: it is recorded on the
 //! decision and logged, never acted on (no model switching, ever).
+//!
+//! # Thinking levels (v0.5.1)
+//!
+//! [`Effort`] is the full thinking scale: `Off | Low | Medium | High |
+//! XHigh | Ultra`. [`ThinkingMode`] is the user's setting: `Auto` (the router
+//! decides per task, and may reach `XHigh`/`Ultra` for genuinely heavy work)
+//! or `Fixed(Effort)` (pinned by the user — the router stands down on effort).
+//! [`ModelSelection`] (`Auto | Pinned`) is a fully independent control: it
+//! never influences thinking resolution and thinking never influences it.
 
 use std::time::Duration;
 
@@ -48,43 +57,62 @@ impl Tier {
     }
 }
 
-/// Reasoning effort levels, mirroring the adapter's `low`/`medium`/`high`.
+/// Thinking levels. `Off` disables reasoning; `XHigh` and `Ultra` are the
+/// extended power levels the router may select on `Auto` for heavy tasks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Effort {
+    Off,
     Low,
     Medium,
     High,
+    XHigh,
+    Ultra,
 }
 
 impl Effort {
-    pub(crate) fn parse(s: &str) -> Option<Self> {
+    /// All levels in UI order.
+    pub const ALL: [&'static str; 6] = ["off", "low", "medium", "high", "xhigh", "ultra"];
+
+    pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
-            "low" => Some(Self::Low),
+            "off" | "none" => Some(Self::Off),
+            "low" | "minimal" => Some(Self::Low),
             "medium" => Some(Self::Medium),
             "high" => Some(Self::High),
+            "xhigh" | "x-high" | "x_high" => Some(Self::XHigh),
+            "ultra" | "max" => Some(Self::Ultra),
             _ => None,
         }
     }
 
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Off => "off",
             Self::Low => "low",
             Self::Medium => "medium",
             Self::High => "high",
+            Self::XHigh => "xhigh",
+            Self::Ultra => "ultra",
         }
     }
 
-    /// Canonical loop caps, mirroring the adapter's `_EFFORT_CANONICAL`:
-    /// (max_turns, ralph_cap).
+    /// Canonical loop caps: (max_turns, ralph_cap).
+    /// Low/Medium/High mirror the adapter's `_EFFORT_CANONICAL`; XHigh/Ultra
+    /// extend it for the heaviest work.
     pub fn canonical_caps(self) -> (u32, u32) {
         match self {
+            Self::Off => (4, 4),
             Self::Low => (4, 4),
             Self::Medium => (6, 8),
             Self::High => (10, 12),
+            Self::XHigh => (14, 16),
+            Self::Ultra => (20, 24),
         }
     }
 
     /// The effort value the tier maps to (adapter `tier_efforts`).
+    /// Note: tiers only ever map to Low/Medium/High. XHigh/Ultra are reached
+    /// via the shim's explicit `effort` field ("shim knows best").
     fn for_tier(tier: Option<Tier>) -> Self {
         match tier {
             Some(Tier::Edge) | Some(Tier::Economy) => Self::Low,
@@ -96,10 +124,111 @@ impl Effort {
 
     pub fn reasoning_effort(self) -> xai_grok_sampling_types::ReasoningEffort {
         match self {
+            Self::Off => xai_grok_sampling_types::ReasoningEffort::None,
             Self::Low => xai_grok_sampling_types::ReasoningEffort::Low,
             Self::Medium => xai_grok_sampling_types::ReasoningEffort::Medium,
             Self::High => xai_grok_sampling_types::ReasoningEffort::High,
+            Self::XHigh => xai_grok_sampling_types::ReasoningEffort::Xhigh,
+            Self::Ultra => xai_grok_sampling_types::ReasoningEffort::Max,
         }
+    }
+
+    /// Convert a sampling-layer effort back into a thinking level (used when
+    /// the user sets effort explicitly via `/effort` or `--effort`: that
+    /// becomes a pinned thinking level).
+    pub fn from_reasoning(effort: xai_grok_sampling_types::ReasoningEffort) -> Self {
+        use xai_grok_sampling_types::ReasoningEffort as R;
+        match effort {
+            R::None => Self::Off,
+            R::Minimal => Self::Low,
+            R::Low => Self::Low,
+            R::Medium => Self::Medium,
+            R::High => Self::High,
+            R::Xhigh => Self::XHigh,
+            R::Max => Self::Ultra,
+        }
+    }
+}
+
+/// The user's thinking-level setting. Fully independent from
+/// [`ModelSelection`]: resolving one never touches the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThinkingMode {
+    /// The SystemOne router picks the effort per task (may reach XHigh/Ultra).
+    Auto,
+    /// Pinned level: the router stands down on effort for this session.
+    Fixed(Effort),
+}
+
+impl ThinkingMode {
+    /// All selectable values in UI order.
+    pub const ALL: [&'static str; 7] = ["off", "low", "medium", "high", "xhigh", "ultra", "auto"];
+
+    pub fn parse(s: &str) -> Option<Self> {
+        let t = s.trim().to_ascii_lowercase();
+        if t == "auto" {
+            return Some(Self::Auto);
+        }
+        Effort::parse(&t).map(Self::Fixed)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Fixed(e) => e.as_str(),
+        }
+    }
+
+    pub fn is_auto(self) -> bool {
+        matches!(self, Self::Auto)
+    }
+
+    /// Resolve the effective effort for a task. Pure function of the mode and
+    /// the routing decision — model selection plays no part.
+    pub fn resolve(self, decision: &RouteDecision) -> Effort {
+        match self {
+            Self::Auto => decision.effort,
+            Self::Fixed(e) => e,
+        }
+    }
+}
+
+impl Default for ThinkingMode {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
+/// The user's model-selection setting. Fully independent from
+/// [`ThinkingMode`]. `Pinned` means "use the session's active model" (the
+/// long-standing default behavior, first-class). `Auto` lets SystemOne pick
+/// per task — recorded as an advisory and shown in the UI; the session never
+/// switches models on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ModelSelection {
+    Auto,
+    #[default]
+    Pinned,
+}
+
+impl ModelSelection {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "pinned" | "manual" | "session" => Some(Self::Pinned),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Pinned => "pinned",
+        }
+    }
+
+    pub fn is_auto(self) -> bool {
+        matches!(self, Self::Auto)
     }
 }
 
@@ -142,7 +271,7 @@ pub struct RouteDecision {
 }
 
 impl RouteDecision {
-    fn fail_open(cfg: &SystemOneConfig, error: Option<String>) -> Self {
+    pub(crate) fn fail_open(cfg: &SystemOneConfig, error: Option<String>) -> Self {
         let (max_turns, _ralph_cap) = cfg.default_effort.canonical_caps();
         Self {
             source: RouteSource::FailOpen,
@@ -162,11 +291,26 @@ impl RouteDecision {
     /// One greppable stderr line proving what routing did. This is the
     /// zero-setup verification evidence.
     pub fn evidence_line(&self, router: RouterStatus) -> String {
+        self.evidence_line_with(router, self.effort, self.effort, ModelSelection::Pinned)
+    }
+
+    /// Evidence line with the *resolved* thinking level (after [`ThinkingMode`]
+    /// resolution) and the model selection, so the line shows what the turn
+    /// actually ran with — no black box.
+    pub fn evidence_line_with(
+        &self,
+        router: RouterStatus,
+        routed_effort: Effort,
+        thinking_applied: Effort,
+        model_selection: ModelSelection,
+    ) -> String {
         let mut parts = vec![
             format!("status={}", router.as_str()),
             format!("source={}", self.source.as_str()),
             format!("tier={}", self.tier.map(Tier::as_str).unwrap_or("-")),
-            format!("effort={}", self.effort.as_str()),
+            format!("effort={}", routed_effort.as_str()),
+            format!("thinking={}", thinking_applied.as_str()),
+            format!("model_selection={}", model_selection.as_str()),
             format!("max_turns={}", self.max_turns),
         ];
         if let Some(conf) = self.confidence {
@@ -322,10 +466,56 @@ mod tests {
     }
 
     #[test]
-    fn canonical_caps_match_adapter() {
+    fn canonical_caps_match_adapter_and_extend() {
+        assert_eq!(Effort::Off.canonical_caps(), (4, 4));
         assert_eq!(Effort::Low.canonical_caps(), (4, 4));
         assert_eq!(Effort::Medium.canonical_caps(), (6, 8));
         assert_eq!(Effort::High.canonical_caps(), (10, 12));
+        assert_eq!(Effort::XHigh.canonical_caps(), (14, 16));
+        assert_eq!(Effort::Ultra.canonical_caps(), (20, 24));
+    }
+
+    #[test]
+    fn effort_parse_covers_full_scale() {
+        assert_eq!(Effort::parse("off"), Some(Effort::Off));
+        assert_eq!(Effort::parse("none"), Some(Effort::Off));
+        assert_eq!(Effort::parse("low"), Some(Effort::Low));
+        assert_eq!(Effort::parse("minimal"), Some(Effort::Low));
+        assert_eq!(Effort::parse("medium"), Some(Effort::Medium));
+        assert_eq!(Effort::parse("HIGH"), Some(Effort::High));
+        assert_eq!(Effort::parse("xhigh"), Some(Effort::XHigh));
+        assert_eq!(Effort::parse("x-high"), Some(Effort::XHigh));
+        assert_eq!(Effort::parse("ultra"), Some(Effort::Ultra));
+        assert_eq!(Effort::parse("max"), Some(Effort::Ultra));
+        assert_eq!(Effort::parse("turbo"), None);
+        assert_eq!(Effort::ALL.len(), 6);
+    }
+
+    #[test]
+    fn effort_maps_to_sampling_effort() {
+        use xai_grok_sampling_types::ReasoningEffort as R;
+        assert_eq!(Effort::Off.reasoning_effort(), R::None);
+        assert_eq!(Effort::Low.reasoning_effort(), R::Low);
+        assert_eq!(Effort::Medium.reasoning_effort(), R::Medium);
+        assert_eq!(Effort::High.reasoning_effort(), R::High);
+        assert_eq!(Effort::XHigh.reasoning_effort(), R::Xhigh);
+        assert_eq!(Effort::Ultra.reasoning_effort(), R::Max);
+    }
+
+    #[test]
+    fn effort_round_trips_through_sampling() {
+        use xai_grok_sampling_types::ReasoningEffort as R;
+        for (r, e) in [
+            (R::None, Effort::Off),
+            (R::Low, Effort::Low),
+            (R::Medium, Effort::Medium),
+            (R::High, Effort::High),
+            (R::Xhigh, Effort::XHigh),
+            (R::Max, Effort::Ultra),
+        ] {
+            assert_eq!(Effort::from_reasoning(r), e);
+            assert_eq!(e.reasoning_effort(), r);
+        }
     }
 
     #[test]
@@ -344,6 +534,25 @@ mod tests {
     }
 
     #[test]
+    fn explicit_xhigh_ultra_effort_honored() {
+        let mut d = RouteDecision::fail_open(&SystemOneConfig::default(), None);
+        let payload = serde_json::json!({
+            "route": {"tier": "heavy", "effort": "xhigh", "confidence": 0.92},
+        });
+        apply_route_payload(&mut d, &payload);
+        assert_eq!(d.effort, Effort::XHigh);
+        assert_eq!(d.max_turns, 14);
+
+        let mut d2 = RouteDecision::fail_open(&SystemOneConfig::default(), None);
+        let payload2 = serde_json::json!({
+            "route": {"tier": "heavy", "effort": "ultra", "confidence": 0.95},
+        });
+        apply_route_payload(&mut d2, &payload2);
+        assert_eq!(d2.effort, Effort::Ultra);
+        assert_eq!(d2.max_turns, 20);
+    }
+
+    #[test]
     fn route_model_id_prefers_route_field() {
         let mut d = RouteDecision::fail_open(&SystemOneConfig::default(), None);
         let payload = serde_json::json!({
@@ -357,6 +566,97 @@ mod tests {
     }
 
     #[test]
+    fn thinking_mode_parse() {
+        assert_eq!(ThinkingMode::parse("auto"), Some(ThinkingMode::Auto));
+        assert_eq!(ThinkingMode::parse("AUTO"), Some(ThinkingMode::Auto));
+        assert_eq!(
+            ThinkingMode::parse("ultra"),
+            Some(ThinkingMode::Fixed(Effort::Ultra))
+        );
+        assert_eq!(
+            ThinkingMode::parse("off"),
+            Some(ThinkingMode::Fixed(Effort::Off))
+        );
+        assert_eq!(ThinkingMode::parse("ludicrous"), None);
+        assert_eq!(ThinkingMode::ALL.len(), 7);
+        assert_eq!(ThinkingMode::default(), ThinkingMode::Auto);
+    }
+
+    #[test]
+    fn thinking_mode_resolve() {
+        let mut d = RouteDecision::fail_open(&SystemOneConfig::default(), None);
+        d.effort = Effort::XHigh;
+        // Auto follows the decision.
+        assert_eq!(ThinkingMode::Auto.resolve(&d), Effort::XHigh);
+        // Fixed pins regardless of the decision.
+        assert_eq!(ThinkingMode::Fixed(Effort::Low).resolve(&d), Effort::Low);
+        assert_eq!(ThinkingMode::Fixed(Effort::Off).resolve(&d), Effort::Off);
+    }
+
+    #[test]
+    fn model_selection_parse() {
+        assert_eq!(ModelSelection::parse("auto"), Some(ModelSelection::Auto));
+        assert_eq!(
+            ModelSelection::parse("pinned"),
+            Some(ModelSelection::Pinned)
+        );
+        assert_eq!(
+            ModelSelection::parse("manual"),
+            Some(ModelSelection::Pinned)
+        );
+        assert_eq!(ModelSelection::parse("grok-4"), None);
+        assert_eq!(ModelSelection::default(), ModelSelection::Pinned);
+        assert!(ModelSelection::Auto.is_auto());
+        assert!(!ModelSelection::Pinned.is_auto());
+    }
+
+    /// Ryan's explicit correction: thinking and model selection are fully
+    /// independent controls. Resolving thinking must never depend on the
+    /// model selection, and vice versa.
+    #[test]
+    fn thinking_and_model_selection_are_independent() {
+        let mut d = RouteDecision::fail_open(&SystemOneConfig::default(), None);
+        d.effort = Effort::High;
+        d.model_id = Some("some-model".to_string());
+        for mode in [
+            ThinkingMode::Auto,
+            ThinkingMode::Fixed(Effort::Off),
+            ThinkingMode::Fixed(Effort::Low),
+            ThinkingMode::Fixed(Effort::Medium),
+            ThinkingMode::Fixed(Effort::High),
+            ThinkingMode::Fixed(Effort::XHigh),
+            ThinkingMode::Fixed(Effort::Ultra),
+        ] {
+            let with_auto = mode.resolve(&d);
+            // Model selection cannot change the resolved thinking: resolve
+            // takes no model-selection input by construction. Assert the
+            // mapping is stable across both selections.
+            for _sel in [ModelSelection::Auto, ModelSelection::Pinned] {
+                assert_eq!(mode.resolve(&d), with_auto, "mode {mode:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn evidence_line_with_shows_resolved_thinking() {
+        let mut d = RouteDecision::fail_open(&SystemOneConfig::default(), Some("boom".into()));
+        d.tier = Some(Tier::Economy);
+        d.effort = Effort::High;
+        d.max_turns = 10;
+        let line = d.evidence_line_with(
+            RouterStatus::AlreadyRunning,
+            Effort::High,
+            Effort::Ultra,
+            ModelSelection::Auto,
+        );
+        assert!(line.starts_with("systemone: "));
+        assert!(line.contains("tier=economy"));
+        assert!(line.contains("effort=high"));
+        assert!(line.contains("thinking=ultra"));
+        assert!(line.contains("model_selection=auto"));
+    }
+
+    #[test]
     fn evidence_line_is_greppable() {
         let mut d = RouteDecision::fail_open(&SystemOneConfig::default(), Some("boom".into()));
         d.tier = Some(Tier::Economy);
@@ -366,6 +666,8 @@ mod tests {
         assert!(line.starts_with("systemone: "));
         assert!(line.contains("tier=economy"));
         assert!(line.contains("effort=low"));
+        assert!(line.contains("thinking=low"));
+        assert!(line.contains("model_selection=pinned"));
         assert!(line.contains("source=fail-open"));
     }
 

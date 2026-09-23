@@ -11,7 +11,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::route::Effort;
+use crate::route::{Effort, ModelSelection, ThinkingMode};
 
 /// Master kill-switch. `0`/`false`/`off`/`no` (case-insensitive) disables ALL
 /// SystemOne behavior: no probe, no shim start, no route call, no pruning.
@@ -29,6 +29,13 @@ pub const ENV_NO_AUTOSTART: &str = "GROK_LOCAL_SYSTEMONE_NO_AUTOSTART";
 pub const ENV_RELEASE_DIR: &str = "SYSTEMONE_RELEASE_DIR";
 /// Override the Python interpreter used to launch the shim (default: `python3.11`).
 pub const ENV_PYTHON: &str = "SYSTEMONE_PYTHON";
+/// Override the thinking level (`off|low|medium|high|xhigh|ultra|auto`).
+/// Highest precedence after the kill-switch: lets one-shot invocations pin
+/// thinking without touching the config file.
+pub const ENV_THINKING: &str = "GROK_LOCAL_SYSTEMONE_THINKING";
+/// Override the model selection (`auto|pinned`). Same precedence as
+/// [`ENV_THINKING`].
+pub const ENV_MODEL_SELECTION: &str = "GROK_LOCAL_SYSTEMONE_MODEL_SELECTION";
 
 /// Default router endpoints: the local shim, then the Jeff-1 fallback.
 /// Mirrors the adapter's `systemone_urls`.
@@ -58,6 +65,13 @@ pub struct SystemOneConfig {
     pub prune_mcp_servers: bool,
     /// Minimum route confidence for pruning to engage.
     pub prune_min_confidence: f64,
+    /// Thinking-level setting: `Auto` (router decides per task) or a pinned
+    /// level. Fully independent from [`SystemOneConfig::model_selection`].
+    pub thinking: ThinkingMode,
+    /// Model-selection setting: `Auto` (SystemOne picks per task — advisory
+    /// only, the session never switches) or `Pinned` (use the session's
+    /// active model). Fully independent from [`SystemOneConfig::thinking`].
+    pub model_selection: ModelSelection,
 }
 
 impl Default for SystemOneConfig {
@@ -72,6 +86,8 @@ impl Default for SystemOneConfig {
             shim_port: 8765,
             prune_mcp_servers: false,
             prune_min_confidence: 0.85,
+            thinking: ThinkingMode::Auto,
+            model_selection: ModelSelection::Pinned,
         }
     }
 }
@@ -106,6 +122,48 @@ impl SystemOneConfig {
     /// Path of the config file this was loaded from (for diagnostics).
     pub fn config_path() -> PathBuf {
         xai_dirs::grok_home().join("config.toml")
+    }
+
+    /// Persist a thinking-level setting to `[systemone] thinking` in the
+    /// config file (read-modify-write; other keys preserved). Fail-open:
+    /// returns `false` on any IO/parse error, `true` on success.
+    pub fn save_thinking(mode: ThinkingMode) -> bool {
+        Self::save_systemone_key("thinking", mode.as_str())
+    }
+
+    /// Persist a model-selection setting to `[systemone] model_selection`.
+    /// Fail-open: returns `false` on any IO/parse error, `true` on success.
+    pub fn save_model_selection(sel: ModelSelection) -> bool {
+        Self::save_systemone_key("model_selection", sel.as_str())
+    }
+
+    fn save_systemone_key(key: &str, value: &str) -> bool {
+        let path = Self::config_path();
+        if let Some(parent) = path.parent()
+            && std::fs::create_dir_all(parent).is_err()
+        {
+            return false;
+        }
+        let mut table: toml::Table = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|t| t.parse().ok())
+            .unwrap_or_default();
+        let section = table
+            .entry("systemone".to_string())
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        if let Some(map) = section.as_table_mut() {
+            map.insert(key.to_string(), toml::Value::String(value.to_string()));
+        } else {
+            return false;
+        }
+        let text = table.to_string();
+        // Write atomically-ish: temp file + rename, so a crash can't corrupt
+        // the user's config.
+        let tmp = path.with_extension("toml.tmp");
+        if std::fs::write(&tmp, text).is_err() {
+            return false;
+        }
+        std::fs::rename(&tmp, &path).is_ok()
     }
 
     fn apply_toml(&mut self, section: &toml::Value) {
@@ -150,6 +208,18 @@ impl SystemOneConfig {
         {
             self.prune_min_confidence = conf;
         }
+        if let Some(mode) = get("thinking")
+            .and_then(toml::Value::as_str)
+            .and_then(ThinkingMode::parse)
+        {
+            self.thinking = mode;
+        }
+        if let Some(sel) = get("model_selection")
+            .and_then(toml::Value::as_str)
+            .and_then(ModelSelection::parse)
+        {
+            self.model_selection = sel;
+        }
     }
 
     fn apply_env(&mut self) {
@@ -185,6 +255,19 @@ impl SystemOneConfig {
         {
             self.timeout = Duration::from_secs(secs);
         }
+        // Session-scoped overrides (e.g. set by CLI flags for one invocation).
+        // These win over the config file; slash commands (`/thinking`,
+        // `/effort`, `/model`) write the file instead so the setting persists.
+        if let Ok(raw) = std::env::var(ENV_THINKING)
+            && let Some(mode) = ThinkingMode::parse(&raw)
+        {
+            self.thinking = mode;
+        }
+        if let Ok(raw) = std::env::var(ENV_MODEL_SELECTION)
+            && let Some(sel) = ModelSelection::parse(&raw)
+        {
+            self.model_selection = sel;
+        }
     }
 }
 
@@ -210,6 +293,8 @@ mod tests {
             ENV_URLS,
             ENV_TIMEOUT_SECS,
             ENV_NO_AUTOSTART,
+            ENV_THINKING,
+            ENV_MODEL_SELECTION,
         ] {
             unsafe { std::env::remove_var(key) };
         }
@@ -238,6 +323,9 @@ mod tests {
         assert!(cfg.auto_start_shim);
         assert!(!cfg.prune_mcp_servers);
         assert!(cfg.routing_active());
+        // v0.5.1 defaults: router-driven thinking, pinned model.
+        assert_eq!(cfg.thinking, ThinkingMode::Auto);
+        assert_eq!(cfg.model_selection, ModelSelection::Pinned);
     }
 
     #[test]
@@ -254,6 +342,8 @@ mod tests {
                 "prune_mcp_servers = true",
                 "prune_min_confidence = 0.9",
                 "shim_port = 9999",
+                "thinking = \"ultra\"",
+                "model_selection = \"auto\"",
                 "urls = [\"http://127.0.0.1:9999/v1/systemone/route\"]",
                 "",
             ]
@@ -271,6 +361,8 @@ mod tests {
         assert_eq!(cfg.prune_min_confidence, 0.9);
         assert_eq!(cfg.shim_port, 9999);
         assert_eq!(cfg.urls, vec!["http://127.0.0.1:9999/v1/systemone/route"]);
+        assert_eq!(cfg.thinking, ThinkingMode::Fixed(Effort::Ultra));
+        assert_eq!(cfg.model_selection, ModelSelection::Auto);
     }
 
     #[test]
@@ -279,7 +371,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("config.toml"),
-            "[systemone]\ntimeout_secs = -3\nshim_port = 99999\ndefault_effort = \"ultra\"\nurls = []\n",
+            "[systemone]\ntimeout_secs = -3\nshim_port = 99999\ndefault_effort = \"turbo\"\nurls = []\nthinking = \"ludicrous\"\nmodel_selection = \"grok-4\"\n",
         )
         .unwrap();
         scrub_speed_env();
@@ -288,6 +380,32 @@ mod tests {
         assert_eq!(cfg.shim_port, 8765);
         assert_eq!(cfg.default_effort, Effort::High);
         assert_eq!(cfg.urls.len(), 2);
+        assert_eq!(cfg.thinking, ThinkingMode::Auto);
+        assert_eq!(cfg.model_selection, ModelSelection::Pinned);
+    }
+
+    #[test]
+    fn env_thinking_and_model_selection_override_file() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[systemone]\nthinking = \"low\"\nmodel_selection = \"pinned\"\n",
+        )
+        .unwrap();
+        scrub_speed_env();
+        unsafe {
+            std::env::set_var(ENV_THINKING, "ultra");
+            std::env::set_var(ENV_MODEL_SELECTION, "auto");
+        }
+        let cfg = SystemOneConfig::load_from(dir.path());
+        assert_eq!(cfg.thinking, ThinkingMode::Fixed(Effort::Ultra));
+        assert_eq!(cfg.model_selection, ModelSelection::Auto);
+        // Invalid values are ignored, the file value stands.
+        unsafe { std::env::set_var(ENV_THINKING, "ludicrous") };
+        let cfg = SystemOneConfig::load_from(dir.path());
+        assert_eq!(cfg.thinking, ThinkingMode::Fixed(Effort::Low));
+        scrub_speed_env();
     }
 
     #[test]
