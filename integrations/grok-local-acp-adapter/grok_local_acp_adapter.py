@@ -79,7 +79,7 @@ import urllib.error
 import urllib.request
 
 NAME = "grok-local-adapter"
-VERSION = "0.5.1"
+VERSION = "0.5.2"
 # Ryan's directive 2026-09-22: grok-local runs on LM Studio models -- never
 # default to the cloud grok CLI (its xAI balance is exhausted, so every
 # turn 402s). GROK_BIN still overrides explicitly.
@@ -122,12 +122,26 @@ SPEED_DEFAULTS = {
         "balanced": "ornith-1.5-35b-a3b",
         "heavy": "ornith-1.5-35b-a3b",
     },
+    # Per-tier loop caps consumed by _grok_one_shot (max_turns) and
+    # _ralph_run (ralph_cap). Values mirror the pre-existing loop bounds:
+    # one-shot max_turns defaulted to 4, ralph iterations to 10 and
+    # per-iteration turns to 8 -- low gets a small cap, medium a moderate
+    # one, high a generous one. A plain effort string ("low"|"medium"|"high")
+    # is still accepted for backward compat with v0.5.x configs and maps to
+    # the canonical caps for that effort (see _EFFORT_CANONICAL).
     "tier_efforts": {
-        "edge": "low",
-        "economy": "low",
-        "balanced": "medium",
-        "heavy": "high",
+        "edge": {"effort": "low", "max_turns": 4, "ralph_cap": 4},
+        "economy": {"effort": "low", "max_turns": 4, "ralph_cap": 4},
+        "balanced": {"effort": "medium", "max_turns": 6, "ralph_cap": 8},
+        "heavy": {"effort": "high", "max_turns": 10, "ralph_cap": 12},
     },
+    # Opt-in model switching, DEFAULT OFF. Ryan's standing rule: the adapter
+    # NEVER unloads a model Ryan loaded himself (one model at a time on this
+    # hardware). When flipped on (config [speed] auto_model_switch = true),
+    # _grok_one_shot unloads the loaded model and loads the routed
+    # local_model before running; it re-verifies afterwards and logs loudly.
+    # Do NOT enable this yourself -- his call only.
+    "auto_model_switch": False,
     # "auto" (default): keep the repaired behavior. A list of server NAMES
     # from config.toml [mcp_servers.*] is resolved to per-session ACP entries.
     "default_mcp_servers": "auto",
@@ -318,24 +332,165 @@ def _pick_local_model(tier, model_id):
     return planner if planner in library else None
 
 
+# Canonical caps per reasoning effort. tier_efforts entries may be a plain
+# effort string (legacy) or a dict overriding any of these fields.
+_EFFORT_CANONICAL = {
+    "low": {"effort": "low", "max_turns": 4, "ralph_cap": 4},
+    "medium": {"effort": "medium", "max_turns": 6, "ralph_cap": 8},
+    "high": {"effort": "high", "max_turns": 10, "ralph_cap": 12},
+}
+
+# Heuristic: keyword overlap between task text/task_labels and configured
+# MCP server names/descriptions. name token = 2 pts, description token = 1 pt.
+_SUGGEST_STOPWORDS = frozenset(
+    "the a an and or of to in on for with as at by from is are was were be "
+    "do does did will would can could should have has had it its this that "
+    "these those you your we they them his her our their my me i not no yes "
+    "if then than so such too very just also only use using used via per "
+    "within into out up down over under again once here there when where "
+    "which who whom whose what why how all any each every some more most "
+    "other own same now don".split())
+
+_SUGGESTION_NOTE = (
+    "Advisory only: the grok agent merges per-session servers with its "
+    "configured servers (verified 2026-09-23) -- nothing agent-side can "
+    "suppress configured servers, so this is a recommendation the caller "
+    "can act on, not enforcement. An empty list means no confident match: "
+    "use everything (fail-open).")
+
+
+def _tier_caps(tier, cfg):
+    """Normalize a tier_efforts entry to {effort, max_turns, ralph_cap}.
+
+    Accepts a plain effort string (v0.5.x legacy) or a dict. Unknown tiers
+    fall back to the high tier's caps (fail-open). Never raises."""
+    entry = (cfg.get("tier_efforts") or {}).get(tier or "")
+    effort = entry if isinstance(entry, str) else (entry or {}).get("effort")
+    caps = dict(_EFFORT_CANONICAL.get(effort, _EFFORT_CANONICAL["high"]))
+    if isinstance(entry, dict):
+        for key in ("max_turns", "ralph_cap"):
+            if entry.get(key) is not None:
+                try:
+                    caps[key] = int(entry[key])
+                except (TypeError, ValueError):
+                    pass
+    return caps
+
+
+def _maybe_switch_model(route):
+    """Opt-in only (config auto_model_switch, default False): unload the
+    loaded model and load the routed local_model, then re-verify.
+
+    Logs loudly to stderr so it is unmissable in MCP host logs. Returns a
+    dict describing what happened. NEVER called unless Ryan flips the flag."""
+    target = route.get("local_model")
+    loaded = route.get("loaded_model")
+    if not target or not loaded:
+        return {"switched": False, "reason": "no local_model or loaded_model in route"}
+    if target == loaded:
+        return {"switched": False, "reason": "target already loaded"}
+    print("grok-local-adapter: auto_model_switch ON -- unloading %s, loading %s"
+          % (loaded, target), file=sys.stderr, flush=True)
+    detail = {"switched": False, "unloaded": loaded, "target": target}
+    try:
+        u = subprocess.run([LMS_BIN, "unload", loaded], capture_output=True,
+                           text=True, timeout=120)
+        detail["unload_rc"] = u.returncode
+        if u.returncode:
+            detail["unload_stderr"] = u.stderr.strip()[-500:]
+        l = subprocess.run([LMS_BIN, "load", target], capture_output=True,
+                           text=True, timeout=600)
+        detail["load_rc"] = l.returncode
+        if l.returncode:
+            detail["load_stderr"] = l.stderr.strip()[-500:]
+    except Exception as exc:
+        detail["error"] = str(exc)
+    _loaded_model_cache.update(at=0.0, model=None)  # force re-check
+    now = lmstudio_loaded_model()
+    detail["verified_loaded"] = now
+    detail["switched"] = (now == target)
+    print("grok-local-adapter: auto_model_switch result switched=%s verified=%s"
+          % (detail["switched"], now), file=sys.stderr, flush=True)
+    return detail
+
+
+def _mcp_server_inventory():
+    """Name + description for configured MCP servers from config.toml
+    [mcp_servers] (the same source the grok CLI reads). Fail-open []."""
+    try:
+        parsed = _parse_toml_subset(CONFIG_TOML.read_text())
+    except Exception:
+        return []
+    servers = parsed.get("mcp_servers", {}) or {}
+    out = []
+    for name, srv in servers.items():
+        if not isinstance(srv, dict):
+            continue
+        if srv.get("enabled", True) is False:
+            continue
+        desc = srv.get("description") or srv.get("command") or ""
+        out.append({"name": name, "description": str(desc)})
+    return out
+
+
+def _suggest_mcp_servers(task_text, task_labels):
+    """Rank configured MCP servers against the task text + SystemOne
+    task_labels by simple transparent keyword overlap (see _SUGGEST_STOPWORDS
+    and scoring in the docstring note below).
+
+    A server scores 2 points per overlapping token found in its name and 1
+    point per token found in its description/command. Only servers with a
+    score > 0 are returned, ranked by score desc (ties broken by name).
+    Returns [] when nothing matches -- that means "no confident suggestion,
+    use everything" (fail-open), NOT "use none".
+    """
+    inventory = _mcp_server_inventory()
+    if not inventory:
+        return []
+    tokens = set(w for w in re.findall(r"[a-z0-9]{3,}", str(task_text).lower())
+                 if w not in _SUGGEST_STOPWORDS)
+    tokens |= set(str(lb).lower() for lb in (task_labels or []) if lb)
+    scored = []
+    for srv in inventory:
+        name_tokens = set(re.findall(r"[a-z0-9]{3,}",
+                                     srv["name"].lower().replace("_", " ").replace("-", " ")))
+        desc_tokens = set(re.findall(r"[a-z0-9]{3,}", srv["description"].lower()))
+        matched = sorted(tokens & (name_tokens | desc_tokens))
+        score = sum(2 if t in name_tokens else 1 for t in matched)
+        if score:
+            scored.append({"name": srv["name"], "score": score, "matched": matched})
+    scored.sort(key=lambda d: (-d["score"], d["name"]))
+    return scored
+
+
 def systemone_route(task_desc, kind="prompt", session_id=None):
     """Ask SystemOne for a routing decision for a task.
 
     Tries each configured URL (3s timeout). On ANY error/timeout returns a
     fail-open decision from config defaults and records the error. The
-    decision maps the SystemOne tier to a grok CLI --reasoning-effort value and
-    permission mode; the model id is a local LM Studio id (advisory). Cached
-    per session_id when given.
+    decision maps the SystemOne tier to a grok CLI --reasoning-effort value,
+    permission mode, and loop caps (max_turns for one-shot prompts,
+    ralph_cap for ralph loop iterations); the model id is a local LM Studio
+    id (advisory). The shim may also return an explicit `effort`
+    ("low"|"medium"|"high") and `task_labels` -- consumed when present,
+    derived locally otherwise (defensive: old shims return neither).
+    Cached per session_id when given.
     """
     if session_id and session_id in _systemone_cache:
         return _systemone_cache[session_id]
     cfg = speed_config()
+    fail_caps = dict(_EFFORT_CANONICAL.get(cfg.get("default_effort"),
+                                           _EFFORT_CANONICAL["high"]))
     decision = {
         "source": "fail-open",
-        "effort": cfg.get("default_effort", "high"),
+        "effort": fail_caps["effort"],
         "permission_mode": cfg.get("permission_mode_default", "auto"),
         "tier": None, "model_id": None, "rationale": None, "confidence": None,
         "local_model": None, "loaded_model": lmstudio_loaded_model(),
+        "max_turns": fail_caps["max_turns"], "ralph_cap": fail_caps["ralph_cap"],
+        "task_labels": [],
+        "suggested_mcp_servers": [], "suggestion_detail": [],
+        "suggestion_note": _SUGGESTION_NOTE,
         "error": None,
     }
     if not cfg.get("enabled", True):
@@ -354,11 +509,22 @@ def systemone_route(task_desc, kind="prompt", session_id=None):
             route = payload.get("route", {}) or {}
             tier = str(route.get("tier", "")).lower()
             model_id = route.get("model_id") or payload.get("model")
-            effort = (cfg.get("tier_efforts") or {}).get(tier, cfg.get("default_effort", "high"))
+            caps = _tier_caps(tier, cfg)
+            shim_effort = route.get("effort")
+            if shim_effort in _EFFORT_CANONICAL:
+                # Shim knows best: an explicit effort overrides the tier caps.
+                caps = dict(_EFFORT_CANONICAL[shim_effort])
+            task_labels = [str(lb) for lb in (route.get("task_labels") or []) if lb]
+            suggestions = _suggest_mcp_servers(task_desc, task_labels)
             decision.update(
                 source="systemone", url=url, tier=tier or None, model_id=model_id,
                 rationale=route.get("rationale"), confidence=route.get("confidence"),
-                effort=effort, local_model=_pick_local_model(tier, model_id),
+                effort=caps["effort"], max_turns=caps["max_turns"],
+                ralph_cap=caps["ralph_cap"],
+                local_model=_pick_local_model(tier, model_id),
+                task_labels=task_labels,
+                suggested_mcp_servers=[s["name"] for s in suggestions],
+                suggestion_detail=suggestions,
                 permission_mode=route.get("permission_mode") or cfg.get("permission_mode_default", "auto"))
             return _cache_route(session_id, decision)
         except Exception as exc:
@@ -368,16 +534,25 @@ def systemone_route(task_desc, kind="prompt", session_id=None):
     return _cache_route(session_id, decision)
 
 
-def _grok_one_shot(prompt, cwd, effort="auto", timeout=300, max_turns=4,
+def _grok_one_shot(prompt, cwd, effort="auto", timeout=300, max_turns=None,
                    permission_mode=None, extra_args=None, task_hint="prompt"):
     """Run one bounded headless turn. effort='auto' asks SystemOne (fail-open
-    to the config default); the value becomes --reasoning-effort."""
+    to the config default); the route decision supplies --reasoning-effort,
+    --max-turns (when max_turns is unset), and ralph_cap. An explicit
+    max_turns always wins. Model switching happens only when config
+    auto_model_switch is true (default false -- Ryan's never-unload rule)."""
     cfg = speed_config()
     if effort == "auto":
         route = systemone_route(prompt, kind=task_hint)
         effort = route.get("effort") or cfg.get("default_effort", "high")
+        if max_turns is None:
+            max_turns = route.get("max_turns") or _tier_caps(None, cfg)["max_turns"]
         if permission_mode is None:
             permission_mode = route.get("permission_mode")
+        if cfg.get("auto_model_switch"):
+            _maybe_switch_model(route)
+    if max_turns is None:
+        max_turns = 4  # legacy bound for explicit-effort calls
     if permission_mode is None:
         permission_mode = cfg.get("permission_mode_default", "auto")
     if not isinstance(cwd, str) or not os.path.isdir(cwd):
@@ -517,6 +692,9 @@ def _ralph_run(args):
     Each iteration starts with a fresh context; the progress file is the only
     state carrier. Stops on done_marker, a passing test_command, a stall
     (byte-identical output twice in a row), iteration error, or the cap.
+    The SystemOne route decision supplies the effort, the ralph iteration
+    cap (ralph_cap) and the per-iteration max_turns when the caller leaves
+    them unset; explicit args always win (fail-open uses the high tier).
     """
     cfg = speed_config()
     task = args.get("task")
@@ -525,7 +703,9 @@ def _ralph_run(args):
     cwd = args.get("cwd", DEFAULT_CWD)
     if not isinstance(cwd, str) or not os.path.isdir(cwd):
         raise ValueError("cwd must be an existing directory")
-    max_iterations = int(args.get("max_iterations", cfg.get("ralph_max_iterations", 10)))
+    route = systemone_route(task, kind="ralph")
+    max_iterations = int(args.get("max_iterations") or route.get("ralph_cap")
+                         or cfg.get("ralph_max_iterations", 10))
     done_marker = args.get("done_marker", cfg.get("ralph_done_marker", "DONE"))
     test_command = args.get("test_command")
     progress_dir = args.get("progress_dir", cfg.get("ralph_progress_dir"))
@@ -536,10 +716,9 @@ def _ralph_run(args):
         with open(progress_file, "w") as f:
             f.write("# Ralph run\n\nTask: %s\n\nStarted: %s\n"
                     % (task.strip(), time.strftime("%Y-%m-%d %H:%M:%S")))
-    route = systemone_route(task, kind="ralph")
     effort = route.get("effort") or cfg.get("default_effort", "high")
     timeout = int(args.get("timeout", 300))
-    max_turns = int(args.get("max_turns", 8))
+    max_turns = int(args.get("max_turns") or route.get("max_turns") or 8)
     prev_output, stopped, last_output, it = None, "max_iterations", "", 0
     for it in range(1, max_iterations + 1):
         with open(progress_file) as f:
@@ -580,6 +759,7 @@ def _ralph_run(args):
         prev_output = output
     return {"task": task.strip(), "iterations": it, "stopped": stopped,
             "progress_file": progress_file, "effort": effort,
+            "max_iterations": max_iterations, "max_turns": max_turns,
             "systemone": {"tier": route.get("tier"), "source": route.get("source")},
             "last_output_tail": last_output[-3000:]}
 
@@ -731,7 +911,7 @@ MCP_SERVERS_PROP = {
 
 
 TOOLS = [
-    {"name": "grok_local_prompt", "description": "Run one bounded, headless Grok Local agent turn using its configured MCP servers and return the response.", "inputSchema": schema({"prompt": {"type": "string"}, "cwd": {"type": "string"}, "timeout": {"type": "integer", "minimum": 1, "maximum": MAX_TIMEOUT, "default": 300}, "max_turns": {"type": "integer", "minimum": 1, "maximum": 10, "default": 4}, "permission_mode": {"type": "string", "default": "auto"}, "allow_subagents": {"type": "boolean", "default": False}, "allow_plan": {"type": "boolean", "default": False}, "effort": {"type": "string", "default": "auto", "description": "'auto' (default): ask SystemOne for the reasoning effort (fail-open to config default_effort); or none/low/medium/high/max, passed as --reasoning-effort."}}, ["prompt"])},
+    {"name": "grok_local_prompt", "description": "Run one bounded, headless Grok Local agent turn using its configured MCP servers and return the response. When effort='auto' (default), SystemOne picks the reasoning effort AND the max_turns cap; an explicit max_turns always wins.", "inputSchema": schema({"prompt": {"type": "string"}, "cwd": {"type": "string"}, "timeout": {"type": "integer", "minimum": 1, "maximum": MAX_TIMEOUT, "default": 300}, "max_turns": {"type": "integer", "minimum": 1, "maximum": 10, "description": "Per-turn agent loop cap. Unset: use the SystemOne tier's max_turns (fail-open: high tier = 10)."}, "permission_mode": {"type": "string", "default": "auto"}, "allow_subagents": {"type": "boolean", "default": False}, "allow_plan": {"type": "boolean", "default": False}, "effort": {"type": "string", "default": "auto", "description": "'auto' (default): ask SystemOne for the reasoning effort and loop caps (fail-open to config defaults); or none/low/medium/high/max, passed as --reasoning-effort."}}, ["prompt"])},
     {"name": "grok_local_status", "description": "Return installed Grok Local and ACP bridge status.", "inputSchema": schema()},
     {"name": "grok_local_models", "description": "List models available to Grok Local (read-only).", "inputSchema": schema()},
     {"name": "grok_local_sessions", "description": "List recent Grok Local sessions (read-only).", "inputSchema": schema()},
@@ -750,7 +930,7 @@ TOOLS = [
     {"name": "grok_local_systemone_route", "description": "Ask SystemOne for a model-tier/effort routing decision for a task (fail-open to config defaults).", "inputSchema": schema({"task": {"type": "string"}, "kind": {"type": "string", "default": "prompt"}, "session_id": {"type": "string"}}, ["task"])},
     {"name": "grok_local_lmstudio_models", "description": "List LM Studio's model library and which model is currently loaded (observational only; never loads/unloads).", "inputSchema": schema()},
     {"name": "grok_local_tools_batch", "description": "Run multiple INDEPENDENT tool calls concurrently; results return in input order. No ordering guarantees between calls -- do not batch calls that depend on each other's outputs, multiple prompts to the same session, or nested tools_batch.", "inputSchema": schema({"calls": {"type": "array", "description": "List of {tool, arguments} objects. Max 16 per batch.", "items": {"type": "object"}}}, ["calls"])},
-    {"name": "grok_local_ralph_run", "description": "Ralph loop: fresh one-shot iterations on a task sharing a progress file; stops on done_marker, a passing test_command, a stall (byte-identical output twice in a row), or the iteration cap.", "inputSchema": schema({"task": {"type": "string"}, "cwd": {"type": "string"}, "max_iterations": {"type": "integer", "default": 10}, "done_marker": {"type": "string", "default": "DONE"}, "test_command": {"type": "string"}, "progress_file": {"type": "string"}, "timeout": {"type": "integer", "default": 300}, "max_turns": {"type": "integer", "default": 8}}, ["task"])},
+    {"name": "grok_local_ralph_run", "description": "Ralph loop: fresh one-shot iterations on a task sharing a progress file; stops on done_marker, a passing test_command, a stall (byte-identical output twice in a row), or the iteration cap. When max_iterations/max_turns are unset, SystemOne's ralph_cap/max_turns apply; explicit values always win.", "inputSchema": schema({"task": {"type": "string"}, "cwd": {"type": "string"}, "max_iterations": {"type": "integer", "description": "Iteration cap. Unset: SystemOne tier ralph_cap (fail-open: high tier = 12)."}, "done_marker": {"type": "string", "default": "DONE"}, "test_command": {"type": "string"}, "progress_file": {"type": "string"}, "timeout": {"type": "integer", "default": 300}, "max_turns": {"type": "integer", "description": "Per-iteration turn cap. Unset: SystemOne tier max_turns."}}, ["task"])},
     {"name": "grok_local_plan_then_execute", "description": "Plan-then-execute: a high-effort planner writes a plan artifact, then a fast executor runs it. Both roles use the loaded local LM Studio model; nothing is loaded or unloaded.", "inputSchema": schema({"task": {"type": "string"}, "cwd": {"type": "string"}, "plan_path": {"type": "string"}, "timeout": {"type": "integer", "default": 600}, "max_turns": {"type": "integer", "default": 10}}, ["task"])},
     {"name": "grok_local_compact_session", "description": "Anchored compaction of the adapter-side transcript: archives the full transcript to ~/.grok-local/transcripts/<session>.jsonl first, then replaces it with a summary preserving permission decisions, file paths touched, and errors.", "inputSchema": schema({"session_id": {"type": "string"}})},
     {"name": "grok_local_slash_verify", "description": "/verify: run build then test commands in the session cwd (auto-detected from package.json/Makefile/pyproject when omitted); returns pass/fail plus output tails.", "inputSchema": schema({"session_id": {"type": "string"}, "cwd": {"type": "string"}, "build_command": {"type": "string"}, "test_command": {"type": "string"}, "timeout": {"type": "integer", "default": 300}})},
@@ -979,7 +1159,7 @@ def handle(name, args):
             extra.append("--no-plan")
         return _grok_one_shot(prompt, cwd, effort=args.get("effort", "auto"),
                               timeout=args.get("timeout", 300),
-                              max_turns=args.get("max_turns", 4),
+                              max_turns=args.get("max_turns"),
                               permission_mode=permission_mode,
                               extra_args=extra, task_hint="prompt")
     if name == "grok_local_status":
@@ -1014,7 +1194,9 @@ def handle(name, args):
                 "systemone": {"tier": route.get("tier"), "effort": route.get("effort"),
                               "local_model": route.get("local_model"),
                               "loaded_model": route.get("loaded_model"),
-                              "source": route.get("source"), "error": route.get("error")}}
+                              "source": route.get("source"), "error": route.get("error"),
+                              "suggested_mcp_servers": route.get("suggested_mcp_servers"),
+                              "suggestion_note": route.get("suggestion_note")}}
     if name == "grok_local_session_load":
         sid = args["session_id"]
         s = AcpSession(args.get("cwd", DEFAULT_CWD))

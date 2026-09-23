@@ -62,11 +62,19 @@ executor_effort = "low"
 default_mcp_servers = "auto"   # or a list of [mcp_servers.*] names
 ralph_max_iterations = 10
 ralph_done_marker = "DONE"
+auto_model_switch = false     # DEFAULT OFF -- do NOT enable yourself. When
+                              # true, each auto-routed call unloads the loaded
+                              # model and loads the routed local_model
+                              # (Ryan's never-unload rule).
 ```
 
 Tier mapping (code defaults, overridable in config): SystemOne
-`edge`/`economy` → effort `low`, `balanced` → `medium`, `heavy` → `high`;
-advisory local models `edge`/`economy` → `ornith-1.5-9b`,
+`edge`/`economy` → effort `low` (max_turns 4, ralph_cap 4),
+`balanced` → `medium` (6, 8), `heavy` → `high` (10, 12). A plain effort
+string per tier (e.g. `economy = "low"`) is still accepted for backward
+compat and maps to that effort's canonical caps. Fail-open (shim down)
+uses the `high` tier's caps.
+Advisory local models `edge`/`economy` → `ornith-1.5-9b`,
 `balanced`/`heavy` → `ornith-1.5-35b-a3b` (validated against the LM Studio
 library; the loaded model is always acceptable).
 
