@@ -67,7 +67,7 @@ jobs:
 
       - name: Build grok-local
         env:
-          GROK_LOCAL_VERSION: "0.5.0"
+          GROK_LOCAL_VERSION: "0.5.1"
         run: cargo build -p xai-grok-pager-bin --release --target ${{ matrix.rust_target }}
 
       - name: Version
