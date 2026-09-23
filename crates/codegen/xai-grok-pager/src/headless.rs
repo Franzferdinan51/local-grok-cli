@@ -501,14 +501,58 @@ struct OpenedSession {
     /// Directory the session is anchored to (launch cwd, resume `original_cwd`, or fork `write_cwd`).
     cwd: PathBuf,
 }
+/// Best-effort routable text from a headless prompt. Never fails: an empty
+/// string routes to the fail-open default.
+fn headless_prompt_text(prompt: Option<&HeadlessPrompt>) -> String {
+    match prompt {
+        Some(HeadlessPrompt::Text(text)) => text.chars().take(2000).collect(),
+        Some(HeadlessPrompt::Blocks(blocks)) => serde_json::to_string(blocks)
+            .map(|s| s.chars().take(2000).collect::<String>())
+            .unwrap_or_default(),
+        None => String::new(),
+    }
+}
+
+/// Name of an ACP MCP server, for SystemOne prune-allowlist filtering.
+/// Name of an ACP MCP server, for SystemOne prune-allowlist filtering.
+/// `None` for transports we don't recognize: those servers are always kept
+/// (fail-open: never drop a server we cannot name).
+fn mcp_server_name(server: &acp::McpServer) -> Option<&str> {
+    match server {
+        acp::McpServer::Stdio(stdio) => Some(stdio.name.as_str()),
+        acp::McpServer::Http(http) => Some(http.name.as_str()),
+        acp::McpServer::Sse(sse) => Some(sse.name.as_str()),
+        // `McpServer` is non-exhaustive.
+        _ => None,
+    }
+}
+
+/// Load MCP servers for a headless session, applying an optional SystemOne
+/// prune allowlist. `None` (or empty) keeps everything: fail-open.
+fn load_mcp_servers_pruned(cwd: &Path, prune: Option<&[String]>) -> Vec<acp::McpServer> {
+    let servers =
+        cli_config::load_mcp_servers(cwd, &xai_grok_tools::types::compat::CompatConfig::default());
+    match prune {
+        Some(allow) if !allow.is_empty() => servers
+            .into_iter()
+            .filter(|s| match mcp_server_name(s) {
+                Some(name) => allow.iter().any(|keep| keep == name),
+                // Unnameable server: keep it (fail-open).
+                None => true,
+            })
+            .collect(),
+        _ => servers,
+    }
+}
+
 async fn open_session(
     acp_tx: &AcpAgentTx,
     cwd: &Path,
     session_id_flag: Option<&str>,
     restore_code: Option<bool>,
+    mcp_prune: Option<&[String]>,
 ) -> anyhow::Result<OpenedSession> {
-    let mcp_servers =
-        cli_config::load_mcp_servers(cwd, &xai_grok_tools::types::compat::CompatConfig::default());
+    let mcp_servers = load_mcp_servers_pruned(cwd, mcp_prune);
     if let Some(sid) = session_id_flag {
         let try_load: Result<acp::LoadSessionResponse, _> = acp_send(
             acp::LoadSessionRequest::new(acp::SessionId::new(sid.to_string()), cwd.to_path_buf())
@@ -554,11 +598,11 @@ async fn open_session_with_id(
     acp_tx: &AcpAgentTx,
     cwd: &Path,
     session_id: &str,
+    mcp_prune: Option<&[String]>,
 ) -> anyhow::Result<OpenedSession> {
     let cwd_str = cwd.to_string_lossy();
     crate::app::session_startup::ensure_session_id_available(session_id, &cwd_str)?;
-    let mcp_servers =
-        cli_config::load_mcp_servers(cwd, &xai_grok_tools::types::compat::CompatConfig::default());
+    let mcp_servers = load_mcp_servers_pruned(cwd, mcp_prune);
     let mut meta = serde_json::json!({ "sessionId": session_id, "sessionKind": "headless" })
         .as_object()
         .cloned();
@@ -583,6 +627,7 @@ async fn fork_then_open(
     parent_cwd: Option<&Path>,
     new_id: Option<&str>,
     restore_code: Option<bool>,
+    mcp_prune: Option<&[String]>,
 ) -> anyhow::Result<OpenedSession> {
     use crate::app::session_startup::{
         effective_fork_new_cwd, ensure_session_id_available, fork_response_error,
@@ -611,7 +656,7 @@ async fn fork_then_open(
     }
     let child = fork_response_new_session_id(resp.0.get())
         .ok_or_else(|| anyhow::anyhow!("fork response missing newSessionId"))?;
-    match open_session(acp_tx, &write_cwd, Some(&child), restore_code).await {
+    match open_session(acp_tx, &write_cwd, Some(&child), restore_code, mcp_prune).await {
         Ok(opened) => Ok(opened),
         Err(e) => Err(anyhow::anyhow!(
             "fork succeeded as {child} but load failed: {e}"
@@ -626,6 +671,7 @@ async fn open_session_in_new_worktree(
     cwd: &Path,
     spec: &WorktreeSpec,
     session_id: Option<&str>,
+    mcp_prune: Option<&[String]>,
 ) -> anyhow::Result<OpenedSession> {
     let created = create_worktree(acp_tx, cwd, spec, &new_worktree_id(session_id))
         .await
@@ -637,8 +683,8 @@ async fn open_session_in_new_worktree(
         "headless: worktree created"
     );
     let opened = match session_id {
-        Some(sid) => open_session_with_id(acp_tx, &created.session_cwd, sid).await,
-        None => open_session(acp_tx, &created.session_cwd, None, None).await,
+        Some(sid) => open_session_with_id(acp_tx, &created.session_cwd, sid, mcp_prune).await,
+        None => open_session(acp_tx, &created.session_cwd, None, None, mcp_prune).await,
     };
     opened.map_err(|e| {
         anyhow::anyhow!(
@@ -656,6 +702,7 @@ async fn resume_session_in_new_worktree(
     session_id: &str,
     restore_code: Option<bool>,
     local_miss: bool,
+    mcp_prune: Option<&[String]>,
 ) -> anyhow::Result<OpenedSession> {
     let resumed = resume_session_into_worktree(
         acp_tx,
@@ -679,6 +726,7 @@ async fn resume_session_in_new_worktree(
         &resumed.session_cwd,
         Some(&resumed.session_id),
         None,
+        mcp_prune,
     )
     .await
     .map_err(|e| {
@@ -814,10 +862,34 @@ pub async fn run_single_turn(
         .map_err(|e| anyhow::anyhow!("Failed to load config: {e}"))?;
     let mut agent_config = AgentConfig::new_from_toml_cfg(&raw_config)
         .map_err(|e| anyhow::anyhow!("Failed to create agent config: {e}"))?;
+    // Native SystemOne routing (v0.5.0): the speed-stack dispatcher baked into
+    // the binary — zero setup, no external adapter, no shim to launch by hand.
+    // Fail-open: anything that goes wrong here leaves the session exactly as
+    // if routing did not exist. Explicit CLI flags always win over routed values.
+    let systemone_cfg = xai_grok_systemone::SystemOneConfig::load();
+    let mut systemone_route: Option<xai_grok_systemone::RouteDecision> = None;
+    let mut systemone_prune: Option<Vec<String>> = None;
+    if systemone_cfg.routing_active() {
+        let router_status = xai_grok_systemone::ensure_router(&systemone_cfg).await;
+        let task_text = headless_prompt_text(prompt.as_ref());
+        let mut decision =
+            xai_grok_systemone::route_for_task(&task_text, "prompt", &systemone_cfg).await;
+        let (_suggestions, prune) =
+            xai_grok_systemone::suggest_and_maybe_prune(&task_text, &mut decision, &systemone_cfg);
+        eprint_line(&decision.evidence_line(router_status));
+        systemone_prune = prune;
+        systemone_route = Some(decision);
+    }
     if let Some(ref token) = options.reasoning_effort
         && let Some(effort) = parse_canonical_effort_token(token)
     {
         agent_config.reasoning_effort_override = Some(effort);
+    }
+    // Routed effort fills the gap only when the user did not set it explicitly.
+    if options.reasoning_effort.is_none()
+        && let Some(ref decision) = systemone_route
+    {
+        agent_config.reasoning_effort_override = Some(decision.effort.reasoning_effort());
     }
     if let Some(ref model) = options.model {
         agent_config.default_model_override = Some(model.clone());
@@ -851,7 +923,9 @@ pub async fn run_single_turn(
         tools: parse_comma_list(options.cli_tools.as_deref()),
         disallowed_tools: parse_comma_list(options.cli_disallowed_tools.as_deref()),
         permission_rules: parse_permission_rules_strict(&options.allow_rules, &options.deny_rules)?,
-        max_turns: options.max_turns,
+        max_turns: options
+            .max_turns
+            .or(systemone_route.as_ref().map(|d| d.max_turns)),
         permission_mode: options
             .permission_mode_flag
             .as_deref()
@@ -987,10 +1061,18 @@ pub async fn run_single_turn(
     xai_grok_telemetry::startup::enter(crate::acp::StartupPhase::SessionCreate);
     let opened = match (materialized, worktree.as_ref()) {
         (MaterializedStartup::NewAuto, Some(spec)) => {
-            open_session_in_new_worktree(&acp_tx, &cwd, spec, None).await
+            open_session_in_new_worktree(&acp_tx, &cwd, spec, None, systemone_prune.as_deref())
+                .await
         }
         (MaterializedStartup::NewWithId { session_id }, Some(spec)) => {
-            open_session_in_new_worktree(&acp_tx, &cwd, spec, Some(&session_id)).await
+            open_session_in_new_worktree(
+                &acp_tx,
+                &cwd,
+                spec,
+                Some(&session_id),
+                systemone_prune.as_deref(),
+            )
+            .await
         }
         (
             MaterializedStartup::Resume {
@@ -1007,12 +1089,15 @@ pub async fn run_single_turn(
                 &session_id,
                 restore_code,
                 deferred_local_miss,
+                systemone_prune.as_deref(),
             )
             .await
         }
-        (MaterializedStartup::NewAuto, None) => open_session(&acp_tx, &cwd, None, None).await,
+        (MaterializedStartup::NewAuto, None) => {
+            open_session(&acp_tx, &cwd, None, None, systemone_prune.as_deref()).await
+        }
         (MaterializedStartup::NewWithId { session_id }, None) => {
-            open_session_with_id(&acp_tx, &cwd, &session_id).await
+            open_session_with_id(&acp_tx, &cwd, &session_id, systemone_prune.as_deref()).await
         }
         (
             MaterializedStartup::Resume {
@@ -1023,7 +1108,14 @@ pub async fn run_single_turn(
             None,
         ) => {
             let load_cwd = original_cwd.as_deref().unwrap_or(cwd.as_path());
-            open_session(&acp_tx, load_cwd, Some(session_id.as_str()), restore_code).await
+            open_session(
+                &acp_tx,
+                load_cwd,
+                Some(session_id.as_str()),
+                restore_code,
+                systemone_prune.as_deref(),
+            )
+            .await
         }
         (
             MaterializedStartup::Fork {
@@ -1041,6 +1133,7 @@ pub async fn run_single_turn(
                 parent_cwd.as_deref(),
                 new_session_id.as_deref(),
                 restore_code,
+                systemone_prune.as_deref(),
             )
             .await
         }

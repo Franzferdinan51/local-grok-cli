@@ -577,6 +577,11 @@ impl SessionActor {
             })
             .sum();
         tracing::Span::current().record("prompt_length", prompt_length as i64);
+        // Native SystemOne routing: per human task, fail-open. Routes before
+        // the turn runs so effort + turn budget apply to this task.
+        if policy.authority.is_human_intent() {
+            self.maybe_route_systemone_turn(&prompt_blocks).await;
+        }
         let prompt_mode =
             self.resolve_turn_prompt_mode(input_origin.as_prompt_origin(), prompt_mode);
         *self.turn_start_prompt_mode.lock() = prompt_mode;
@@ -3771,7 +3776,12 @@ impl SessionActor {
                 _ => {}
             }
             let next_turn = tool_turn_count + 1;
-            if let Some(limit) = self.max_turns
+            // The user's explicit max_turns wins; else the SystemOne routed budget.
+            let effective_limit = self
+                .systemone_turn
+                .lock()
+                .effective_max_turns(self.max_turns);
+            if let Some(limit) = effective_limit
                 && next_turn > limit
             {
                 tracing::info!(

@@ -179,6 +179,9 @@ pub(super) async fn make_replay_send_update_fixture() -> ReplaySendUpdateFixture
         max_retries: 3,
         rate_limit_waits: crate::session::acp_session::RateLimitWaitConfig::default(),
         max_turns: None,
+        systemone_turn: parking_lot::Mutex::new(
+            crate::session::acp_session::SystemOneTurnState::default(),
+        ),
         pending_interjections: InterjectionBuffer::new(),
         pending_skill_reminders: Mutex::new(Vec::new()),
         idle_flush_timeout: None,

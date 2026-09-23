@@ -58,7 +58,7 @@ version and the grok-build version that overlay was applied on.
 
 ```sh
 grok-local --version
-# grok-local 0.4.10 (<git sha>)
+# grok-local 0.5.0 (<git sha>)
 # grok-build 1.0.38 (<SOURCE_REV>)
 ```
 
@@ -171,6 +171,41 @@ The user guide ships with the pager crate:
 [`crates/codegen/xai-grok-pager/docs/user-guide/`](crates/codegen/xai-grok-pager/docs/user-guide/)
 — getting started, keyboard shortcuts, slash commands, configuration, theming,
 MCP servers, skills, plugins, hooks, headless mode, sandboxing, and more.
+
+## SystemOne native routing (v0.5.0)
+
+Every task — `grok-local --single` headless prompts and interactive/ACP
+per-turn prompts alike — routes through the local **SystemOne** router
+(`http://127.0.0.1:8765`, the `knowledgator/gliclass-edge-v3.0` classifier)
+**natively** — no external adapter to wire, no config entries to add, no shim
+to launch by hand. If the router is not running, the binary starts the
+installed shim itself (detached; the model is already in the HuggingFace
+cache, so cold start is seconds).
+
+The returned tier maps to a reasoning effort and loop cap
+(`edge`/`economy` → low / 4 turns, `balanced` → medium / 6, `heavy` →
+high / 10). Headless: applied only when `--reasoning-effort` / `--max-turns`
+were not passed explicitly. Interactive: the routed effort auto-tunes each
+turn unless you explicitly set one (then the router stands down); the routed
+turn cap applies unless `--max-turns` was passed. Route-driven MCP server
+suggestions are logged; actual pruning of the per-session MCP list (headless
+only) is opt-in and conservative (live router, ≥ 0.85 confidence, cheap tier
+only).
+
+Fail-open always: a router outage or error leaves the session exactly as if
+routing did not exist. One greppable `systemone: …` line on stderr proves
+what routing did (source, tier, effort, max_turns, confidence).
+
+Kill-switches (env wins over `~/.grok-local/config.toml` `[systemone]`):
+
+| Env | Effect |
+|---|---|
+| `GROK_LOCAL_SYSTEMONE=0` | Disable all routing behavior |
+| `GROK_LOCAL_SYSTEMONE_NO_AUTOSTART=1` | Probe only; never start the shim |
+| `GROK_LOCAL_SYSTEMONE_PRUNE=1` | Opt in to conservative MCP pruning |
+
+The router's `model_id` is advisory only — it is logged, never acted on.
+This binary never unloads or switches your loaded model.
 
 ## Repository layout
 

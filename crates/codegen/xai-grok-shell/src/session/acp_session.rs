@@ -96,8 +96,11 @@ pub use types::{TodoGateDecision, TodoGateReason};
 mod goal;
 #[path = "acp_session_impl/named_workflow_args.rs"]
 mod named_workflow_args;
+#[path = "acp_session_impl/systemone_turn.rs"]
+mod systemone_turn;
 #[path = "acp_session_impl/turn.rs"]
 mod turn;
+pub(crate) use systemone_turn::SystemOneTurnState;
 #[path = "acp_session_impl/workflow.rs"]
 mod workflow_run;
 pub(crate) use turn::SUBAGENT_USAGE_DRAIN;
@@ -841,6 +844,9 @@ pub(crate) struct SessionActor {
     pub(crate) rate_limit_waits: RateLimitWaitConfig,
     /// Maximum tool-use turns before the session stops. `None` means unlimited.
     pub(crate) max_turns: Option<usize>,
+    /// Native SystemOne per-turn routing state (effort auto-tune + turn budget).
+    /// Fail-open: the router only fills this in on live decisions.
+    pub(crate) systemone_turn: parking_lot::Mutex<SystemOneTurnState>,
     /// Pending mid-turn interjections from the user (Ctrl+Enter).
     /// Pushed by `SessionCommand::Interject` handler, drained at safe points in `process_conversation_turn`.
     /// Internally synchronized.

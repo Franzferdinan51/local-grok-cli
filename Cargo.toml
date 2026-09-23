@@ -67,6 +67,7 @@ members = [
     "crates/codegen/xai-grok-shell-terminal",
     "crates/codegen/xai-grok-status-line",
     "crates/codegen/xai-grok-subagent-resolution",
+    "crates/codegen/xai-grok-systemone",
     "crates/codegen/xai-grok-telemetry",
     "crates/codegen/xai-grok-test-support",
     "crates/codegen/xai-grok-tools",

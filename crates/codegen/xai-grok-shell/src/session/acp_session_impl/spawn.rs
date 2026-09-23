@@ -1887,6 +1887,7 @@ pub(crate) async fn spawn_session_actor(
             remote_settings.as_ref().and_then(|r| r.uncharged_401_park),
         ),
         max_turns,
+        systemone_turn: Mutex::new(SystemOneTurnState::default()),
         max_retries: resolved_max_retries,
         rate_limit_waits: RateLimitWaitConfig::with_max_attempts(subagent_rate_limit_max_attempts),
         pending_interjections: InterjectionBuffer::new(),

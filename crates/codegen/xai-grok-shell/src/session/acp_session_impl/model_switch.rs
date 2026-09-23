@@ -231,6 +231,8 @@ impl SessionActor {
             cfg.model = routed;
         }
         cfg.reasoning_effort = Some(effort);
+        // The user chose explicitly: SystemOne routing stands down on effort.
+        self.note_systemone_effort_user_locked();
         let model_id = acp::ModelId::new(cfg.model.clone());
         self.chat_state_handle.update_sampling_config(cfg);
         let agent_name = self.agent.borrow().definition().name.clone();

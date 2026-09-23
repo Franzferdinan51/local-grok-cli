@@ -14177,6 +14177,7 @@ dependencies = [
  "xai-grok-sandbox",
  "xai-grok-shell",
  "xai-grok-status-line",
+ "xai-grok-systemone",
  "xai-grok-telemetry",
  "xai-grok-test-support",
  "xai-grok-tools",
@@ -14649,6 +14650,7 @@ dependencies = [
  "xai-grok-shell-terminal",
  "xai-grok-status-line",
  "xai-grok-subagent-resolution",
+ "xai-grok-systemone",
  "xai-grok-telemetry",
  "xai-grok-test-support",
  "xai-grok-tools",
@@ -14769,6 +14771,23 @@ dependencies = [
  "xai-grok-sampling-types",
  "xai-grok-tools",
  "xai-tool-types",
+]
+
+[[package]]
+name = "xai-grok-systemone"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "reqwest 0.12.24",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
+ "xai-dirs",
+ "xai-grok-sampling-types",
 ]
 
 [[package]]

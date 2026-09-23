@@ -118,6 +118,7 @@ xai-grok-shell = { workspace = true }
 # agent sends. A leaf crate rather than the agent's, so the client reads it
 # from upstream of the crate that fills it in.
 xai-grok-status-line = { workspace = true }
+xai-grok-systemone = { path = "../xai-grok-systemone" }
 xai-grok-workspace = { workspace = true }
 # Foreign coding-agent session discovery.
 xai-grok-foreign-sessions = { workspace = true }
