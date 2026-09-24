@@ -55,6 +55,7 @@ members = [
     "crates/codegen/xai-grok-paths",
     "crates/codegen/xai-grok-plugin-marketplace",
     "crates/codegen/xai-grok-sampler",
+    "crates/codegen/xai-grok-agentflow",
     "crates/codegen/xai-grok-sampling-types",
     "crates/codegen/xai-grok-sandbox",
     "crates/codegen/xai-grok-secrets",

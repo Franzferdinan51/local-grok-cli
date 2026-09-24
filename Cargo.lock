@@ -13617,6 +13617,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "xai-grok-agentflow"
+version = "0.5.1"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
+ "xai-dirs",
+]
+
+[[package]]
 name = "xai-grok-announcements"
 version = "0.1.0"
 dependencies = [
