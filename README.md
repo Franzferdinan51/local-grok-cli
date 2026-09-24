@@ -225,6 +225,14 @@ The selectors are also settable via env: `GROK_LOCAL_SYSTEMONE_THINKING`
 `GROK_LOCAL_SYSTEMONE_MODEL_SELECTION` (`auto|pinned`) — env wins over the
 config file, same precedence as the kill-switches above.
 
+Jeff-1 second decision head: the shim now consults **Jeff-1**
+([GestaltLabs/Jeff-1](https://huggingface.co/GestaltLabs/Jeff-1) — Apache 2.0,
+LoRA on [Qwen3-4B-Instruct-2507](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507))
+for plan ranking and second opinions on uncertain routes. `ranked_tools`
+from the shim drives MCP/server suggestions (shim-ranked provenance);
+`ranked_models` is advisory-only. Certain routes never touch Jeff-1, and a
+down or slow sidecar fails open to GLiClass-only with zero behavior change.
+
 ## Repository layout
 
 | Path | Contents |
