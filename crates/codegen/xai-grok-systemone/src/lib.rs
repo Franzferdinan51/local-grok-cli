@@ -13,6 +13,19 @@
 //! - [`suggest_mcp_servers`] / [`prune_allowlist`]: route-driven MCP server
 //!   suggestions, with conservative opt-in pruning.
 //!
+//! # Decision surfaces (Phase 3)
+//!
+//! Newer shims attach a scored surface to the route: `uncertain`, `margin`,
+//! `calibrated_probabilities`, `ranked_models` (expected-utility order,
+//! advisory), `ranked_tools` with `tool_scoring` (`"full"` | `"skipped"`).
+//! - [`RouteDecision::uncertain`] disables pruning unconditionally.
+//! - [`RouteDecision::has_shim_tool_ranking`]: when true, the shim's ranked
+//!   tools drive MCP/server suggestions (see
+//!   [`suggest::suggestions_from_ranked_tools`]).
+//! - [`rank_plans`] scores candidate plans via `POST /v1/systemone/rank-plans`
+//!   (advisory, fail-open).
+//! Older shims omit these keys: absence is "not present", never an error.
+//!
 //! # Thinking levels (v0.5.1)
 //!
 //! [`ThinkingMode`] is the user's thinking setting: `Auto` (the router picks
@@ -43,9 +56,10 @@
 //!
 //! # Model switching
 //!
-//! Deliberately NOT implemented: the router's model id is advisory only and is
-//! logged, never acted on. Ryan's standing rule — never unload a model he
-//! loaded himself — is enforced by simply not having a code path that does it.
+//! Deliberately NOT implemented: the router's model id and `ranked_models`
+//! are advisory only and are logged, never acted on. Ryan's standing rule —
+//! never unload a model he loaded himself — is enforced by simply not having
+//! a code path that does it.
 
 pub mod config;
 pub mod route;
@@ -55,11 +69,12 @@ pub mod suggest;
 
 pub use config::SystemOneConfig;
 pub use route::{
-    Effort, ModelSelection, RouteDecision, RouteSource, ThinkingMode, Tier, route_for_task,
+    Effort, ModelSelection, PlanInput, PlanRanking, RankedModel, RankedTool, RouteDecision,
+    RouteSource, ThinkingMode, Tier, rank_plans, route_for_task,
 };
 pub use shim::{RouterStatus, ensure_router};
 pub use state::LastRoute;
 pub use suggest::{
     McpServerInfo, ServerSuggestion, inventory_from_config, prune_allowlist,
-    suggest_and_maybe_prune, suggest_mcp_servers, suggestion_detail,
+    suggest_and_maybe_prune, suggest_mcp_servers, suggestion_detail, suggestions_from_ranked_tools,
 };

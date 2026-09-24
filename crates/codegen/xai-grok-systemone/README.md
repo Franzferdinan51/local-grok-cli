@@ -23,11 +23,18 @@ fallback.
    explicitly. An explicit `effort` in the shim response wins ("shim knows best").
 4. **MCP suggestions** — configured `[mcp_servers.*]` are scored against the
    task text + route `task_labels` (name token = 2, description token = 1).
-   Conservative pruning is **opt-in** and engages only for live-router,
-   high-confidence (≥ 0.85), cheap-tier (`edge`/`economy`) routes with
-   non-empty suggestions.
+   When the router returns the Phase 3 decision surface with
+   `tool_scoring == "full"` and a non-empty `ranked_tools` list, the shim's
+   hybrid (keyword + zero-shot model) tool ranking drives suggestions instead
+   of the local keyword scorer. Conservative pruning is **opt-in** and engages
+   only for live-router, high-confidence (≥ 0.85), cheap-tier
+   (`edge`/`economy`), **non-uncertain** routes with non-empty suggestions.
+   `uncertain == true` disables pruning unconditionally (noted in the evidence
+   line as `prune=disabled(uncertain)`); `tool_scoring == "skipped"` or absent
+   keys keep the pre-Phase-3 behavior exactly.
 5. **Evidence** — one greppable `systemone: …` line on stderr proves what
-   routing did (route source, tier, effort, max_turns, confidence).
+   routing did (route source, tier, effort, max_turns, confidence, plus
+   `uncertain=true` / `prune=…` / `model_ranking=<top>` when applicable).
 
 ## What happens per turn (interactive TUI / ACP)
 
@@ -41,7 +48,26 @@ the same way, then:
 - **Turn budget** — the routed `max_turns` caps the tool loop unless the user
   passed an explicit `--max-turns`, which always wins.
 - **Evidence** — the decision is logged (`shell.systemone.route`) with tier,
-  effort, max_turns, source, and confidence.
+  effort, max_turns, source, and confidence. The status bar can show the
+  shim's best-value advisory (`model:auto→<top-ranked>`) — display only, the
+  session's model never changes.
+
+## Decision surfaces (Phase 3)
+
+Newer shims attach a scored surface to the route dict:
+
+| Key | Meaning |
+|---|---|
+| `uncertain` | Shim's uncertainty verdict — disables MCP pruning unconditionally |
+| `margin` | Top-1/top-2 calibrated probability margin |
+| `calibrated_probabilities` | Temperature-fitted tier distribution (probability desc) |
+| `ranked_models` | Top models by expected utility — **advisory only**, surfaced as `model_ranking=<top>` in the evidence line and the TUI's `model:auto→…` suffix. Never switches or unloads anything. |
+| `ranked_tools` + `tool_scoring` | Hybrid tool relevance ranking; `"full"` drives MCP/server suggestions, `"skipped"` (uncertain or cheap path) keeps keyword scoring |
+
+`POST /v1/systemone/rank-plans` (`{"task", "plans": [{"id", "text"}]}`)
+scores candidate plans — advisory, fail-open (input order, `score: None` on
+any failure). Older shims omit these keys entirely: absence is "not present",
+never an error, and behavior is exactly the pre-Phase-3 one.
 
 ## Fail-open contract
 

@@ -8,16 +8,28 @@
 //! An empty suggestion list means "no confident match: use everything"
 //! (fail-open), NOT "use none".
 //!
+//! # Phase 3: shim-ranked tools
+//!
+//! When the router returns the new decision surface with
+//! `tool_scoring == "full"` and a non-empty `ranked_tools` list, the shim's
+//! hybrid (keyword + zero-shot model) tool ranking drives suggestions
+//! instead of the local keyword scorer. The existing prune gates are
+//! unchanged — the ranking only changes *what* is suggested.
+//!
 //! Pruning is conservative and opt-in: it engages only when the route came
 //! from a live router (not fail-open), the confidence meets the configured
-//! threshold, and the tier is a cheap one (`edge`/`economy`) — the cases where
-//! a small, focused toolset is both safe and the point. Everything else keeps
-//! the full configured server list.
+//! threshold, the tier is a cheap one (`edge`/`economy`) — the cases where
+//! a small, focused toolset is both safe and the point — and the router is
+//! NOT uncertain. Everything else keeps the full configured server list.
+//!
+//! `uncertain == true` disables pruning unconditionally: an uncertain route
+//! must never narrow the toolset. When `tool_scoring == "skipped"` or the
+//! keys are absent (older shim), behavior is exactly the pre-Phase-3 one.
 
 use std::collections::HashSet;
 
 use crate::config::SystemOneConfig;
-use crate::route::{RouteDecision, RouteSource, Tier};
+use crate::route::{RankedTool, RouteDecision, RouteSource, Tier};
 
 /// Stopwords excluded from suggestion tokens. Same list as the adapter's
 /// `_SUGGEST_STOPWORDS`.
@@ -143,12 +155,34 @@ pub fn suggest_mcp_servers(
     scored
 }
 
+/// Build suggestions from the shim's ranked tools (Phase 3,
+/// `tool_scoring == "full"`).
+///
+/// The shim already sorted by relevance desc; we keep that order (ties by
+/// id). Relevance [0.0, 1.0] is scaled to the 0–100 `ServerSuggestion`
+/// score. The `matched` field records the provenance so logs show these
+/// came from the router, not the keyword scorer.
+pub fn suggestions_from_ranked_tools(ranked: &[RankedTool]) -> Vec<ServerSuggestion> {
+    let mut suggestions: Vec<ServerSuggestion> = ranked
+        .iter()
+        .map(|t| ServerSuggestion {
+            name: t.id.clone(),
+            score: (t.relevance.clamp(0.0, 1.0) * 100.0).round() as u32,
+            matched: vec!["shim-ranked".to_string()],
+        })
+        .collect();
+    suggestions.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.name.cmp(&b.name)));
+    suggestions
+}
+
 /// Decide whether conservative MCP pruning engages for this decision.
 ///
 /// All of these must hold:
 /// - pruning is opted in (`[systemone] prune_mcp_servers` or
 ///   `GROK_LOCAL_SYSTEMONE_PRUNE=1`),
 /// - the decision came from a live router (never fail-open),
+/// - the route is NOT uncertain (`uncertain == true` disables pruning
+///   unconditionally — an uncertain route must never narrow the toolset),
 /// - confidence meets `prune_min_confidence`,
 /// - the tier is cheap (`edge`/`economy`) — pruning a heavy task's toolset is
 ///   exactly the wrong economy,
@@ -160,6 +194,10 @@ pub fn prune_allowlist(decision: &RouteDecision, cfg: &SystemOneConfig) -> Optio
         return None;
     }
     if decision.source != RouteSource::SystemOne {
+        return None;
+    }
+    // Phase 3: the shim's own uncertainty verdict overrides everything.
+    if decision.uncertain == Some(true) {
         return None;
     }
     let confidence = decision.confidence.unwrap_or(0.0);
@@ -177,15 +215,29 @@ pub fn prune_allowlist(decision: &RouteDecision, cfg: &SystemOneConfig) -> Optio
 
 /// Convenience: full pipeline from task text to an optional prune allowlist.
 /// Returns `(suggestions, prune_allowlist)`.
+///
+/// When the decision carries the shim's tool ranking
+/// (`tool_scoring == "full"` with ranked tools), suggestions come from the
+/// ranking; otherwise the keyword scorer runs (pre-Phase-3 behavior).
+/// An uncertain route disables pruning and records a diagnostic note on the
+/// decision (`prune=disabled(uncertain)` in the evidence line) so the
+/// operator can see the toolset was deliberately left wide.
 pub fn suggest_and_maybe_prune(
     task_text: &str,
     decision: &mut RouteDecision,
     cfg: &SystemOneConfig,
 ) -> (Vec<ServerSuggestion>, Option<Vec<String>>) {
-    let inventory = inventory_from_config();
-    let suggestions = suggest_mcp_servers(task_text, &decision.task_labels, &inventory);
+    let suggestions = if decision.has_shim_tool_ranking() {
+        suggestions_from_ranked_tools(&decision.ranked_tools)
+    } else {
+        let inventory = inventory_from_config();
+        suggest_mcp_servers(task_text, &decision.task_labels, &inventory)
+    };
     decision.suggested_mcp_servers = suggestions.iter().map(|s| s.name.clone()).collect();
     let allow = prune_allowlist(decision, cfg);
+    if allow.is_none() && decision.uncertain == Some(true) {
+        decision.prune_note = Some("disabled(uncertain)".to_string());
+    }
     (suggestions, allow)
 }
 
@@ -218,6 +270,39 @@ mod tests {
                 description: "legacy python adapter".to_string(),
             },
         ]
+    }
+
+    /// A live-router decision with pruning opted in (matches the old
+    /// `prune_gates` fixture, extended with the Phase 3 fields).
+    fn routed_decision() -> RouteDecision {
+        RouteDecision {
+            source: RouteSource::SystemOne,
+            url: Some("http://127.0.0.1:8765/v1/systemone/route".to_string()),
+            tier: Some(Tier::Economy),
+            effort: crate::route::Effort::Low,
+            max_turns: 4,
+            confidence: Some(0.9),
+            rationale: None,
+            model_id: None,
+            task_labels: vec![],
+            suggested_mcp_servers: vec!["web-search".to_string()],
+            error: None,
+            uncertain: None,
+            margin: None,
+            calibrated: None,
+            tool_scoring: None,
+            ranked_tools: Vec::new(),
+            ranked_models: Vec::new(),
+            calibrated_probabilities: Vec::new(),
+            prune_note: None,
+        }
+    }
+
+    fn prune_cfg() -> SystemOneConfig {
+        SystemOneConfig {
+            prune_mcp_servers: true,
+            ..SystemOneConfig::default()
+        }
     }
 
     #[test]
@@ -270,23 +355,8 @@ mod tests {
 
     #[test]
     fn prune_gates() {
-        let cfg = SystemOneConfig {
-            prune_mcp_servers: true,
-            ..SystemOneConfig::default()
-        };
-        let mut decision = RouteDecision {
-            source: RouteSource::SystemOne,
-            url: Some("http://127.0.0.1:8765/v1/systemone/route".to_string()),
-            tier: Some(Tier::Economy),
-            effort: crate::route::Effort::Low,
-            max_turns: 4,
-            confidence: Some(0.9),
-            rationale: None,
-            model_id: None,
-            task_labels: vec![],
-            suggested_mcp_servers: vec!["web-search".to_string()],
-            error: None,
-        };
+        let cfg = prune_cfg();
+        let mut decision = routed_decision();
         assert_eq!(
             prune_allowlist(&decision, &cfg),
             Some(vec!["web-search".to_string()])
@@ -348,5 +418,127 @@ mod tests {
 
         let missing = inventory_from_path(&dir.path().join("nope.toml"));
         assert!(missing.is_empty());
+    }
+
+    // ---------------- Phase 3 tests ----------------
+
+    /// `uncertain == true` disables pruning unconditionally, even when every
+    /// other gate (opt-in, live router, high confidence, cheap tier,
+    /// non-empty suggestions) passes.
+    #[test]
+    fn uncertain_disables_pruning() {
+        let cfg = prune_cfg();
+        let mut decision = routed_decision();
+        // All classic gates pass...
+        assert!(prune_allowlist(&decision, &cfg).is_some());
+        // ...until the shim says it's uncertain.
+        decision.uncertain = Some(true);
+        assert_eq!(prune_allowlist(&decision, &cfg), None);
+        // Explicit `false` keeps the old behavior.
+        decision.uncertain = Some(false);
+        assert!(prune_allowlist(&decision, &cfg).is_some());
+    }
+
+    /// An older shim (no new keys) keeps the keyword suggestion path and the
+    /// pre-Phase-3 prune behavior: pruning still engages when opted in.
+    #[test]
+    fn missing_ranked_tools_keeps_old_behavior() {
+        let cfg = prune_cfg();
+        let decision = routed_decision();
+        assert!(!decision.has_shim_tool_ranking());
+        assert_eq!(decision.uncertain, None);
+        // Classic gates unchanged: prune still engages on a live, confident,
+        // cheap-tier route with suggestions.
+        assert_eq!(
+            prune_allowlist(&decision, &cfg),
+            Some(vec!["web-search".to_string()])
+        );
+    }
+
+    #[test]
+    fn shim_ranked_tools_become_suggestions() {
+        let ranked = vec![
+            RankedTool {
+                id: "web-search".to_string(),
+                kind: Some("mcp".to_string()),
+                relevance: 0.92,
+            },
+            RankedTool {
+                id: "browserclaw".to_string(),
+                kind: Some("mcp".to_string()),
+                relevance: 0.61,
+            },
+        ];
+        let suggestions = suggestions_from_ranked_tools(&ranked);
+        assert_eq!(suggestions.len(), 2);
+        assert_eq!(suggestions[0].name, "web-search");
+        assert_eq!(suggestions[0].score, 92);
+        assert_eq!(suggestions[1].name, "browserclaw");
+        assert_eq!(suggestions[1].score, 61);
+        assert_eq!(suggestions[0].matched, vec!["shim-ranked".to_string()]);
+        // Out-of-range relevance is clamped, never panics.
+        let weird = vec![RankedTool {
+            id: "x".to_string(),
+            kind: None,
+            relevance: 2.5,
+        }];
+        assert_eq!(suggestions_from_ranked_tools(&weird)[0].score, 100);
+    }
+
+    /// Full pipeline: a `tool_scoring == "full"` decision uses the shim's
+    /// ranking for suggestions; the classic prune gates still decide whether
+    /// pruning engages.
+    #[test]
+    fn suggest_pipeline_uses_shim_ranking() {
+        let cfg = prune_cfg();
+        let mut decision = routed_decision();
+        decision.tool_scoring = Some("full".to_string());
+        decision.ranked_tools = vec![RankedTool {
+            id: "web-search".to_string(),
+            kind: Some("mcp".to_string()),
+            relevance: 0.9,
+        }];
+        // "unrelated text with no keyword overlap" must not produce keyword
+        // suggestions — the shim ranking drives instead.
+        let (suggestions, allow) = suggest_and_maybe_prune(
+            "unrelated text with no keyword overlap",
+            &mut decision,
+            &cfg,
+        );
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!(suggestions[0].name, "web-search");
+        assert_eq!(
+            decision.suggested_mcp_servers,
+            vec!["web-search".to_string()]
+        );
+        // Classic gates still apply: opted-in + live + confident + cheap tier.
+        assert_eq!(allow, Some(vec!["web-search".to_string()]));
+        assert_eq!(decision.prune_note, None);
+    }
+
+    /// Full pipeline: an uncertain route records the diagnostic note and
+    /// passes all candidate tools through (no pruning).
+    #[test]
+    fn suggest_pipeline_notes_uncertain_no_prune() {
+        let cfg = prune_cfg();
+        let mut decision = routed_decision();
+        decision.uncertain = Some(true);
+        decision.tool_scoring = Some("skipped".to_string());
+        let (suggestions, allow) =
+            suggest_and_maybe_prune("check the cannabis tent sensors", &mut decision, &cfg);
+        // Suggestions still computed (whatever the keyword path found)...
+        assert_eq!(
+            decision.suggested_mcp_servers,
+            suggestions
+                .iter()
+                .map(|s| s.name.clone())
+                .collect::<Vec<_>>()
+        );
+        // ...but pruning is disabled and the note is recorded.
+        assert_eq!(allow, None);
+        assert_eq!(decision.prune_note.as_deref(), Some("disabled(uncertain)"));
+        let line = decision.evidence_line(crate::shim::RouterStatus::AlreadyRunning);
+        assert!(line.contains("uncertain=true"));
+        assert!(line.contains("prune=disabled(uncertain)"));
     }
 }

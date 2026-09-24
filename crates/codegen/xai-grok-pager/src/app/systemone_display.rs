@@ -19,6 +19,8 @@ struct Cache {
     model_selection: ModelSelection,
     last_thinking_applied: Option<String>,
     last_model_advisory: Option<String>,
+    /// Shim's best-value model ranking (top-first, advisory only).
+    last_model_ranking: Vec<String>,
 }
 
 static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
@@ -37,6 +39,10 @@ fn refresh_locked(guard: &mut Cache) {
         .as_ref()
         .map(|r| r.thinking_applied.as_str().to_string());
     guard.last_model_advisory = last.as_ref().and_then(|r| r.model_advisory.clone());
+    guard.last_model_ranking = last
+        .as_ref()
+        .map(|r| r.model_ranking.clone())
+        .unwrap_or_default();
     guard.refreshed_at = Some(Instant::now());
 }
 
@@ -46,8 +52,9 @@ fn refresh_locked(guard: &mut Cache) {
 ///   the last routed turn, `think:auto` before the first route, `think:ultra`
 ///   when pinned.
 /// - Model shows only when automatic: `model:auto→ornith-1.5-9b` with the
-///   router's last advisory, `model:auto` before the first route. Pinned (the
-///   default) adds no noise.
+///   router's best-value advisory — the top of the shim's ranked-models list
+///   when present, else the route's `model_id`. Pinned (the default) adds no
+///   noise. Advisory only: the label never switches the session's model.
 /// - Empty string when SystemOne routing is disabled.
 pub fn systemone_status_suffixes() -> String {
     let mut guard = cache().lock().unwrap_or_else(|e| e.into_inner());
@@ -70,9 +77,14 @@ pub fn systemone_status_suffixes() -> String {
     };
     parts.push(format!("think:{think}"));
     if guard.model_selection == ModelSelection::Auto {
-        let model = match &guard.last_model_advisory {
-            Some(advisory) => format!("auto→{advisory}"),
-            None => "auto".to_string(),
+        // Best-value advisory first (Phase 3 ranked models), then the route's
+        // model_id. Display only — never changes the session's model.
+        let model = match guard.last_model_ranking.first() {
+            Some(top) => format!("auto→{top}"),
+            None => match &guard.last_model_advisory {
+                Some(advisory) => format!("auto→{advisory}"),
+                None => "auto".to_string(),
+            },
         };
         parts.push(format!("model:{model}"));
     }
