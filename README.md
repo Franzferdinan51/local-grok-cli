@@ -119,6 +119,36 @@ to `PATH` with:
 Use `-BinaryPath` to install a binary from another location, or `-InstallDir`
 to choose a different user bin directory.
 
+## Minimum requirements
+
+For running the **prebuilt binary** from GitHub Releases. (Build-time
+requirements — Rust, DotSlash, protoc — are in the next section.)
+
+- **OS / CPU** — 64-bit only, and only the platforms CI ships:
+  Linux x86_64, macOS on Apple Silicon, Windows x86_64. There are no
+  official builds for Intel macOS, ARM Windows, ARM Linux, or 32-bit.
+- **Disk** — ~250 MB for the binary (release assets measure 155–230 MB
+  by platform), plus ~1 GB for the built-in SystemOne router (torch
+  ~0.6 GB, GLiClass edge checkpoint 256 MB — both measured), plus
+  ~15 GB if you enable the Jeff-1 second head (its model weights in the
+  HuggingFace cache — measured; skip with `SYSTEMONE_JEFF1=0`).
+- **Inference (the real requirement)** — grok-local needs somewhere to
+  run models: LM Studio locally (OpenAI-compatible,
+  `http://localhost:1234` by default) or an API key for a hosted
+  provider. Model requirements are the *model's*, not the tool's: a
+  35B-class local model wants tens of GB of RAM/VRAM — check the model
+  card / LM Studio for the specific model before loading it. Reference
+  setup: Windows 11 PC with 64 GB RAM serving models through LM Studio;
+  Mac mini (M4 Pro, 24 GB) reaching them over LM Link.
+- **SystemOne routing (on by default)** — the router is a Python shim,
+  so it needs Python >= 3.10 (per the shim's `requires-python`).
+  grok-local looks for `python3.11` by default; override with
+  `SYSTEMONE_PYTHON`. Auto-start is attempted on Unix only — on Windows
+  start the shim yourself (`python -m systemone.shim`) or keep it
+  running; grok-local probes port `:8765` either way and works fail-open
+  without it. Kill switches: `GROK_LOCAL_SYSTEMONE=0` (routing off),
+  `SYSTEMONE_JEFF1=0` (GLiClass only, no Jeff-1 second head).
+
 ## Building from source
 
 Requirements:
