@@ -77,6 +77,7 @@ fn process_identity(command: Option<&Command>, is_interactive: bool) -> Option<P
             | Command::Completions { .. }
             | Command::Worktree(_)
             | Command::DiskUsage(_)
+            | Command::Onboard(_)
             | Command::Workspace(_),
         ) => (Entrypoint::Cli, Interactivity::Unattended),
         None if is_interactive => return None,
@@ -116,6 +117,7 @@ fn command_needs_pre_sandbox_policy_heal(command: Option<&Command>) -> bool {
             | Command::Version { .. }
             | Command::Completions { .. }
             | Command::DiskUsage(_)
+            | Command::Onboard(_)
             | Command::Workspace(_),
         ) => false,
     }
@@ -2130,6 +2132,11 @@ async fn async_main(mut args: PagerArgs) -> Result<()> {
     } else {
         xai_grok_workspace::permission::ClientType::Generic
     });
+    if is_interactive {
+        // First-run onboarding: no config file yet, interactive terminal, not
+        // skipped. Never fails the launch — errors are reported, not raised.
+        xai_grok_pager::onboard_cmd::maybe_run_first_run(args.skip_onboarding);
+    }
     schedule_startup_prewarm();
     args.pin_local_resume_target()?;
     let saved_profile = args.saved_resume_profile();
@@ -2245,6 +2252,10 @@ async fn async_main(mut args: PagerArgs) -> Result<()> {
                 let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
                 run_setup_command(json).await;
                 return Ok(());
+            }
+            Command::Onboard(onboard_args) => {
+                init_tracing_simple("cli");
+                return xai_grok_pager::onboard_cmd::run(&onboard_args);
             }
             Command::Mcp(mcp_args) => {
                 init_tracing_simple("cli");

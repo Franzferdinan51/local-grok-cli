@@ -36,14 +36,20 @@ pub const ENV_THINKING: &str = "GROK_LOCAL_SYSTEMONE_THINKING";
 /// Override the model selection (`auto|pinned`). Same precedence as
 /// [`ENV_THINKING`].
 pub const ENV_MODEL_SELECTION: &str = "GROK_LOCAL_SYSTEMONE_MODEL_SELECTION";
+/// `0`/`false`/`off`/`no` (case-insensitive) disables the Jeff-1 second
+/// decision head: the `:8079` fallback endpoint is dropped and routing is
+/// GLiClass-only. `1`/`true`/`on`/`yes` (or unset) keeps it on.
+pub const ENV_JEFF1: &str = "SYSTEMONE_JEFF1";
 
-/// Default router endpoints: the local shim, then the Jeff-1 fallback.
+/// Default router endpoints: the local shim, then the Jeff-1 fallback
+/// (`:8079`) when the second decision head is enabled.
 /// Mirrors the adapter's `systemone_urls`.
-fn default_urls() -> Vec<String> {
-    vec![
-        "http://127.0.0.1:8765/v1/systemone/route".to_string(),
-        "http://127.0.0.1:8079/v1/systemone/route".to_string(),
-    ]
+fn default_urls(jeff1_enabled: bool) -> Vec<String> {
+    let mut urls = vec!["http://127.0.0.1:8765/v1/systemone/route".to_string()];
+    if jeff1_enabled {
+        urls.push("http://127.0.0.1:8079/v1/systemone/route".to_string());
+    }
+    urls
 }
 
 #[derive(Debug, Clone)]
@@ -72,13 +78,17 @@ pub struct SystemOneConfig {
     /// only, the session never switches) or `Pinned` (use the session's
     /// active model). Fully independent from [`SystemOneConfig::thinking`].
     pub model_selection: ModelSelection,
+    /// Jeff-1 second decision head. When false, the `:8079` fallback
+    /// endpoint is dropped (unless `urls` were explicitly customized) and
+    /// routing is GLiClass-only. Env: `SYSTEMONE_JEFF1`.
+    pub jeff1_enabled: bool,
 }
 
 impl Default for SystemOneConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            urls: default_urls(),
+            urls: default_urls(true),
             timeout: Duration::from_secs(3),
             // Fail-open effort mirrors grok-local's own default_reasoning_effort.
             default_effort: Effort::High,
@@ -88,6 +98,7 @@ impl Default for SystemOneConfig {
             prune_min_confidence: 0.85,
             thinking: ThinkingMode::Auto,
             model_selection: ModelSelection::Pinned,
+            jeff1_enabled: true,
         }
     }
 }
@@ -111,7 +122,19 @@ impl SystemOneConfig {
             cfg.apply_toml(section);
         }
         cfg.apply_env();
+        // Jeff-1 must be resolved before urls are finalized: disabling it
+        // drops the `:8079` fallback unless the user set custom urls.
+        cfg.reconcile_jeff1_urls();
         cfg
+    }
+
+    /// Keep `urls` consistent with `jeff1_enabled` when the URL list is still
+    /// one of the defaults: disabling Jeff-1 drops the `:8079` fallback.
+    /// Explicit custom URLs are never rewritten.
+    fn reconcile_jeff1_urls(&mut self) {
+        if self.urls == default_urls(true) || self.urls == default_urls(false) {
+            self.urls = default_urls(self.jeff1_enabled);
+        }
     }
 
     /// True when routing should run at all. The single gate callers check.
@@ -138,7 +161,18 @@ impl SystemOneConfig {
     }
 
     fn save_systemone_key(key: &str, value: &str) -> bool {
-        let path = Self::config_path();
+        Self::save_systemone_key_at(
+            &xai_dirs::grok_home(),
+            key,
+            toml::Value::String(value.to_string()),
+        )
+    }
+
+    /// Persist a `[systemone]` string key (read-modify-write; other keys
+    /// preserved) against an explicit grok home. Used by tests and the
+    /// onboarding wizard. Fail-open: `false` on any IO/parse error.
+    pub fn save_systemone_key_at(home: &Path, key: &str, value: toml::Value) -> bool {
+        let path = home.join("config.toml");
         if let Some(parent) = path.parent()
             && std::fs::create_dir_all(parent).is_err()
         {
@@ -152,7 +186,7 @@ impl SystemOneConfig {
             .entry("systemone".to_string())
             .or_insert_with(|| toml::Value::Table(toml::Table::new()));
         if let Some(map) = section.as_table_mut() {
-            map.insert(key.to_string(), toml::Value::String(value.to_string()));
+            map.insert(key.to_string(), value);
         } else {
             return false;
         }
@@ -164,6 +198,12 @@ impl SystemOneConfig {
             return false;
         }
         std::fs::rename(&tmp, &path).is_ok()
+    }
+
+    /// Persist a `[systemone]` boolean key (same fail-open contract as
+    /// [`SystemOneConfig::save_systemone_key_at`]).
+    pub fn save_systemone_bool_at(home: &Path, key: &str, value: bool) -> bool {
+        Self::save_systemone_key_at(home, key, toml::Value::Boolean(value))
     }
 
     fn apply_toml(&mut self, section: &toml::Value) {
@@ -220,6 +260,9 @@ impl SystemOneConfig {
         {
             self.model_selection = sel;
         }
+        if let Some(v) = get("jeff1_enabled").and_then(toml::Value::as_bool) {
+            self.jeff1_enabled = v;
+        }
     }
 
     fn apply_env(&mut self) {
@@ -268,6 +311,9 @@ impl SystemOneConfig {
         {
             self.model_selection = sel;
         }
+        if let Some(v) = std::env::var(ENV_JEFF1).ok().and_then(|s| parse_bool(&s)) {
+            self.jeff1_enabled = v;
+        }
     }
 }
 
@@ -295,6 +341,7 @@ mod tests {
             ENV_NO_AUTOSTART,
             ENV_THINKING,
             ENV_MODEL_SELECTION,
+            ENV_JEFF1,
         ] {
             unsafe { std::env::remove_var(key) };
         }
@@ -326,6 +373,62 @@ mod tests {
         // v0.5.1 defaults: router-driven thinking, pinned model.
         assert_eq!(cfg.thinking, ThinkingMode::Auto);
         assert_eq!(cfg.model_selection, ModelSelection::Pinned);
+        // Jeff-1 second head on by default: both endpoints present.
+        assert!(cfg.jeff1_enabled);
+        assert!(cfg.urls[1].contains(":8079"));
+    }
+
+    #[test]
+    fn jeff1_env_off_drops_fallback_only() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        scrub_speed_env();
+        unsafe { std::env::set_var(ENV_JEFF1, "0") };
+        let cfg = SystemOneConfig::load_from(dir.path());
+        assert!(!cfg.jeff1_enabled);
+        assert_eq!(cfg.urls.len(), 1);
+        assert!(cfg.urls[0].contains(":8765"));
+        scrub_speed_env();
+    }
+
+    #[test]
+    fn jeff1_off_keeps_explicit_custom_urls() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[systemone]\njeff1_enabled = false\nurls = [\"http://127.0.0.1:9999/v1/systemone/route\"]\n",
+        )
+        .unwrap();
+        scrub_speed_env();
+        let cfg = SystemOneConfig::load_from(dir.path());
+        assert!(!cfg.jeff1_enabled);
+        // Explicit urls win: reconcile must not clobber them.
+        assert_eq!(cfg.urls, vec!["http://127.0.0.1:9999/v1/systemone/route"]);
+        scrub_speed_env();
+    }
+
+    #[test]
+    fn save_key_at_roundtrip() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        scrub_speed_env();
+        assert!(SystemOneConfig::save_systemone_bool_at(
+            dir.path(),
+            "jeff1_enabled",
+            false
+        ));
+        assert!(SystemOneConfig::save_systemone_key_at(
+            dir.path(),
+            "model_selection",
+            toml::Value::String("auto".to_string())
+        ));
+        let cfg = SystemOneConfig::load_from(dir.path());
+        assert!(!cfg.jeff1_enabled);
+        assert_eq!(cfg.model_selection, ModelSelection::Auto);
+        // Only the shim endpoint remains when Jeff-1 is off and urls are default.
+        assert_eq!(cfg.urls.len(), 1);
+        scrub_speed_env();
     }
 
     #[test]

@@ -81,6 +81,8 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// First-run setup wizard: requirements check, inference setup, SystemOne routing
+    Onboard(crate::onboard_cmd::OnboardArgs),
     /// Share a session and print the share URL
     #[command(hide = true)]
     Share(crate::share_cmd::ShareArgs),
@@ -489,6 +491,9 @@ pub struct PagerArgs {
     /// Trust this folder and persist the decision to the trust store.
     #[arg(long = "trust", alias = "trust-folder", hide = true)]
     pub trust: bool,
+    /// Skip the first-run onboarding wizard (also: GROK_LOCAL_SKIP_ONBOARDING=1 or GROK_LOCAL_ONBOARDING=0).
+    #[arg(long)]
+    pub skip_onboarding: bool,
     /// Permission allow rule (compat alias: --allowedTools).
     #[arg(
         long = "allow",

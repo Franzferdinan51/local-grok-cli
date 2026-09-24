@@ -149,6 +149,14 @@ requirements — Rust, DotSlash, protoc — are in the next section.)
   without it. Kill switches: `GROK_LOCAL_SYSTEMONE=0` (routing off),
   `SYSTEMONE_JEFF1=0` (GLiClass only, no Jeff-1 second head).
 
+**First run:** `grok-local onboard` walks through a requirements check,
+inference setup (detects LM Studio on `:1234`), and SystemOne routing
+options, writing `~/.grok-local/config.toml`. It also runs automatically
+the first time you launch grok-local interactively with no config file
+(skip with `--skip-onboarding`, `GROK_LOCAL_SKIP_ONBOARDING=1`, or
+`GROK_LOCAL_ONBOARDING=0`). Non-interactive runs accept defaults via
+`--yes`; `--check` runs the requirements check only.
+
 ## Building from source
 
 Requirements:
