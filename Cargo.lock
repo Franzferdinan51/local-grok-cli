@@ -14632,6 +14632,7 @@ dependencies = [
  "xai-file-utils",
  "xai-fsnotify",
  "xai-grok-agent",
+ "xai-grok-agentflow",
  "xai-grok-announcements",
  "xai-grok-auth",
  "xai-grok-bundle",

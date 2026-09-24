@@ -1020,6 +1020,34 @@ impl SessionActor {
                 apply_turn_image_budget_and_prune(&self.chat_state_handle, simplified_messages)
                     .await;
         }
+        // Agent-flow anchored compaction: archive the pre-compaction
+        // transcript and append anchor-preservation instructions to the
+        // summary context. Fail-open: compaction proceeds unchanged on
+        // any error or when disabled.
+        let transcript_pairs: Vec<(String, String)> = simplified_messages
+            .iter()
+            .map(|item| {
+                let role = match item.role() {
+                    xai_grok_sampling_types::Role::System => "system",
+                    xai_grok_sampling_types::Role::User => "user",
+                    xai_grok_sampling_types::Role::Assistant => "assistant",
+                    xai_grok_sampling_types::Role::Tool => "tool",
+                }
+                .to_string();
+                (role, item.text_content())
+            })
+            .filter(|(_, text)| !text.trim().is_empty())
+            .collect();
+        if let Some(anchored) = self.agentflow_turn.lock().anchored_compaction_prep(
+            &xai_dirs::grok_home(),
+            &self.session_info.id.0,
+            &transcript_pairs,
+        ) {
+            user_context = Some(match user_context {
+                Some(existing) => format!("{existing}\n\n{anchored}"),
+                None => anchored,
+            });
+        }
         let pre_compaction_ms = assembly_start.elapsed().as_millis() as u64;
         if conv_len == 0 {
             tracing::error!(

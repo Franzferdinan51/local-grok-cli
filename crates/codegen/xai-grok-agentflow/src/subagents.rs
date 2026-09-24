@@ -221,8 +221,7 @@ pub fn build_subagent_child_brief(task_summary: &str, child_max_turns: u32) -> S
     let task_line = if task.is_empty() {
         "the delegated investigation".to_string()
     } else {
-        let short: String = task.chars().take(400).collect();
-        format!("{short}")
+        task.chars().take(400).collect()
     };
     format!(
         "You are a subagent with a hard budget of {child_max_turns} tool-use turns for: {task_line}\n\n\

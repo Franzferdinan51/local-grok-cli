@@ -3807,10 +3807,11 @@ impl SessionActor {
             // Agent-flow budget ladder: warn at 80%, escalate at the cap
             // (one extra step granted), stop when still over cap.
             // Fail-open when disabled or unconfigured.
-            if let Some(fired) = self.agentflow_turn.lock().check_budget(
-                next_turn as u64,
-                self.events.tool_count_this_turn() as u64,
-            ) {
+            if let Some(fired) = self
+                .agentflow_turn
+                .lock()
+                .check_budget(next_turn as u64, self.events.tool_count_this_turn() as u64)
+            {
                 self.push_system_reminder(&fired.body);
                 if fired.kind == AgentFlowBudgetKind::Stop {
                     tracing::info!(

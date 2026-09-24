@@ -182,6 +182,9 @@ pub(super) async fn make_replay_send_update_fixture() -> ReplaySendUpdateFixture
         systemone_turn: parking_lot::Mutex::new(
             crate::session::acp_session::SystemOneTurnState::default(),
         ),
+        agentflow_turn: parking_lot::Mutex::new(
+            crate::session::acp_session::agentflow_turn::AgentFlowTurnState::default(),
+        ),
         pending_interjections: InterjectionBuffer::new(),
         pending_skill_reminders: Mutex::new(Vec::new()),
         idle_flush_timeout: None,

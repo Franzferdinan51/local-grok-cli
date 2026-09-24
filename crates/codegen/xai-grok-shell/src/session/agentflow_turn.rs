@@ -22,6 +22,7 @@
 
 use std::path::Path;
 
+use xai_grok_agentflow::EnvReader;
 use xai_grok_agentflow::anchored_compaction::{
     archive_transcript, build_anchored_summary_prompt, extract_transcript_anchors,
     is_anchored_compaction_disabled, resolve_archive_keep_count, rotate_transcript_archives,
@@ -29,29 +30,29 @@ use xai_grok_agentflow::anchored_compaction::{
 use xai_grok_agentflow::budgets::{BudgetUsage, TurnBudgets};
 use xai_grok_agentflow::config::AgentFlowConfig;
 use xai_grok_agentflow::doom_loop::{
-    advance_doom_loop, build_doom_loop_final_unattended_body, build_doom_loop_nudge_body,
+    DoomLoopTransitionKind, DoomLoopTurnState, advance_doom_loop,
+    build_doom_loop_final_unattended_body, build_doom_loop_nudge_body,
     build_doom_loop_strategy_body, is_doom_loop_disabled, record_doom_loop_tool_use,
-    untried_doom_loop_tools, DoomLoopTransitionKind, DoomLoopTurnState,
+    untried_doom_loop_tools,
 };
 use xai_grok_agentflow::effort::{EffortBehaviorPolicy, SubagentAllowance};
 use xai_grok_agentflow::enforcement::{
-    apply_budget_action, build_budget_escalation_body, build_budget_exhausted_body,
-    build_budget_warning_body, evaluate_budget_enforcement, is_budget_enforcement_disabled,
-    BudgetEnforcementAction, BudgetMessageContext, BudgetStageState,
+    BudgetEnforcementAction, BudgetMessageContext, BudgetStageState, apply_budget_action,
+    build_budget_escalation_body, build_budget_exhausted_body, build_budget_warning_body,
+    evaluate_budget_enforcement, is_budget_enforcement_disabled,
 };
 use xai_grok_agentflow::plan_execute::{
-    build_planner_prompt, decide_plan_then_execute, is_plan_then_execute_disabled,
-    plan_artifact_dir, PlanExecuteGateDecision, PlanExecuteGateInput, PLAN_ARTIFACT_FILENAME,
+    PLAN_ARTIFACT_FILENAME, PlanExecuteGateDecision, PlanExecuteGateInput, build_planner_prompt,
+    decide_plan_then_execute, is_plan_then_execute_disabled, plan_artifact_dir,
 };
 use xai_grok_agentflow::subagents::{
-    build_subagent_cost_guidance, decide_subagent_spawn, is_subagents_disabled,
-    SubagentSpawnDecision, SubagentSpawnRequest,
+    SubagentSpawnDecision, SubagentSpawnRequest, build_subagent_cost_guidance,
+    decide_subagent_spawn, is_subagents_disabled,
 };
 use xai_grok_agentflow::tool_packs::{
-    compute_tool_shortlist, resolve_active_labels, split_mcp_tool_name, ComputeToolShortlistInput,
-    ToolSchemaDescriptor,
+    ComputeToolShortlistInput, ToolSchemaDescriptor, compute_tool_shortlist, resolve_active_labels,
+    split_mcp_tool_name,
 };
-use xai_grok_agentflow::EnvReader;
 use xai_grok_tools::implementations::grok_build::task::is_task_tool_id;
 use xai_grok_tools::types::ToolDefinition;
 
@@ -177,7 +178,10 @@ impl AgentFlowTurnState {
         if gate.as_ref().is_some_and(|g| g.plan) {
             let plan_path =
                 plan_artifact_dir(&xai_dirs::grok_home(), session_id).join(PLAN_ARTIFACT_FILENAME);
-            reminders.push(build_planner_prompt(prompt_text, &plan_path.to_string_lossy()));
+            reminders.push(build_planner_prompt(
+                prompt_text,
+                &plan_path.to_string_lossy(),
+            ));
         }
         if !is_subagents_disabled(get_env) {
             match policy.subagents {
@@ -316,18 +320,16 @@ impl AgentFlowTurnState {
             BudgetMessageContext::from_usage_tier(usage, self.budgets, self.tier_name.as_deref());
         let (kind, body) = match action {
             BudgetEnforcementAction::Ok => return None,
-            BudgetEnforcementAction::Warn => (
-                AgentFlowBudgetKind::Warn,
-                build_budget_warning_body(&ctx),
-            ),
+            BudgetEnforcementAction::Warn => {
+                (AgentFlowBudgetKind::Warn, build_budget_warning_body(&ctx))
+            }
             BudgetEnforcementAction::Escalate => (
                 AgentFlowBudgetKind::Escalate,
                 build_budget_escalation_body(&ctx),
             ),
-            BudgetEnforcementAction::Stop => (
-                AgentFlowBudgetKind::Stop,
-                build_budget_exhausted_body(&ctx),
-            ),
+            BudgetEnforcementAction::Stop => {
+                (AgentFlowBudgetKind::Stop, build_budget_exhausted_body(&ctx))
+            }
         };
         Some(AgentFlowBudgetFired {
             kind,

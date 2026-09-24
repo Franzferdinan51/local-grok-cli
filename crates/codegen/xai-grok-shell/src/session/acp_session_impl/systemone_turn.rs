@@ -184,10 +184,11 @@ impl super::SessionActor {
         // --- Agent-flow: resolve the route into per-turn policy (budgets,
         // tool shortlist state, plan gate, subagent guidance, doom-loop
         // ladder). Fail-open: inert when disabled. Never touches models.
-        let agentflow_outcome = self
-            .agentflow_turn
-            .lock()
-            .apply_route_decision(decision, prompt_text, &self.session_info.id.0);
+        let agentflow_outcome = self.agentflow_turn.lock().apply_route_decision(
+            decision,
+            prompt_text,
+            &self.session_info.id.0,
+        );
         for reminder in &agentflow_outcome.reminders {
             self.push_system_reminder(reminder);
         }

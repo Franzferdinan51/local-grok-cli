@@ -200,6 +200,9 @@ async fn persist_ack_waits_for_disk_flush_before_success() {
                 systemone_turn: parking_lot::Mutex::new(
                     crate::session::acp_session::SystemOneTurnState::default(),
                 ),
+                agentflow_turn: parking_lot::Mutex::new(
+                    crate::session::acp_session::agentflow_turn::AgentFlowTurnState::default(),
+                ),
                 pending_interjections: InterjectionBuffer::new(),
                 pending_skill_reminders: Mutex::new(Vec::new()),
                 idle_flush_timeout: None,
@@ -746,6 +749,9 @@ async fn first_turn_memory_injection_disabled_does_not_persist_to_chat_history()
                 systemone_turn: parking_lot::Mutex::new(
                     crate::session::acp_session::SystemOneTurnState::default(),
                 ),
+                agentflow_turn: parking_lot::Mutex::new(
+                    crate::session::acp_session::agentflow_turn::AgentFlowTurnState::default(),
+                ),
                 pending_interjections: InterjectionBuffer::new(),
                 pending_skill_reminders: Mutex::new(Vec::new()),
                 idle_flush_timeout: None,
@@ -1086,6 +1092,9 @@ async fn cancel_running_task_teardown_clears_running_and_pending_work() {
                 rate_limit_waits: crate::session::acp_session::RateLimitWaitConfig::default(),
                 max_turns: None,
                 systemone_turn: parking_lot::Mutex::new(crate::session::acp_session::SystemOneTurnState::default()),
+                agentflow_turn: parking_lot::Mutex::new(
+                    crate::session::acp_session::agentflow_turn::AgentFlowTurnState::default(),
+                ),
                 pending_interjections: InterjectionBuffer::new(),
                 pending_skill_reminders: Mutex::new(Vec::new()),
                 idle_flush_timeout: None,
@@ -2653,6 +2662,9 @@ async fn cancel_propagates_to_sampler_handle_so_no_further_emission() {
                 rate_limit_waits: crate::session::acp_session::RateLimitWaitConfig::default(),
                 max_turns: None,
                 systemone_turn: parking_lot::Mutex::new(crate::session::acp_session::SystemOneTurnState::default()),
+                agentflow_turn: parking_lot::Mutex::new(
+                    crate::session::acp_session::agentflow_turn::AgentFlowTurnState::default(),
+                ),
                 pending_interjections: InterjectionBuffer::new(),
                 pending_skill_reminders: Mutex::new(Vec::new()),
                 idle_flush_timeout: None,
