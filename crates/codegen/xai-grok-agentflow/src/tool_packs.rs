@@ -81,141 +81,425 @@ pub static TOOL_PACK_LABEL_TABLE: &[ToolPackLabelRule] = &[
     ToolPackLabelRule {
         label: "code-review",
         aliases: &["review", "code review"],
-        keywords: &["review", "pull request", "pr review", "code review", "approve"],
-        keep_tools: &["read_file", "grep", "grep_files", "hashline_read", "hashline_grep"],
+        keywords: &[
+            "review",
+            "pull request",
+            "pr review",
+            "code review",
+            "approve",
+        ],
+        keep_tools: &[
+            "read_file",
+            "grep",
+            "grep_files",
+            "hashline_read",
+            "hashline_grep",
+        ],
         keep_servers: &["github", "gitlab", "pr"],
     },
     ToolPackLabelRule {
         label: "testing",
         aliases: &["test", "tests"],
-        keywords: &["test", "tests", "testing", "pytest", "jest", "vitest", "cargo test", "go test", "coverage", "spec"],
-        keep_tools: &["bash", "run_terminal_command", "read_file", "grep", "grep_files"],
+        keywords: &[
+            "test",
+            "tests",
+            "testing",
+            "pytest",
+            "jest",
+            "vitest",
+            "cargo test",
+            "go test",
+            "coverage",
+            "spec",
+        ],
+        keep_tools: &[
+            "bash",
+            "run_terminal_command",
+            "read_file",
+            "grep",
+            "grep_files",
+        ],
         keep_servers: &["test", "coverage"],
     },
     ToolPackLabelRule {
         label: "debugging",
         aliases: &["debug", "fix"],
-        keywords: &["debug", "debugging", "stack trace", "error", "exception", "fix the bug", "bug", "crash", "traceback", "panic"],
-        keep_tools: &["read_file", "grep", "grep_files", "bash", "run_terminal_command", "edit", "hashline_read", "hashline_grep"],
+        keywords: &[
+            "debug",
+            "debugging",
+            "stack trace",
+            "error",
+            "exception",
+            "fix the bug",
+            "bug",
+            "crash",
+            "traceback",
+            "panic",
+        ],
+        keep_tools: &[
+            "read_file",
+            "grep",
+            "grep_files",
+            "bash",
+            "run_terminal_command",
+            "edit",
+            "hashline_read",
+            "hashline_grep",
+        ],
         keep_servers: &["sentry", "debug"],
     },
     ToolPackLabelRule {
         label: "refactoring",
         aliases: &["refactor"],
-        keywords: &["refactor", "refactoring", "restructure", "clean up", "cleanup", "rename"],
-        keep_tools: &["read_file", "edit", "search_replace", "grep", "grep_files", "bash", "run_terminal_command", "lsp"],
+        keywords: &[
+            "refactor",
+            "refactoring",
+            "restructure",
+            "clean up",
+            "cleanup",
+            "rename",
+        ],
+        keep_tools: &[
+            "read_file",
+            "edit",
+            "search_replace",
+            "grep",
+            "grep_files",
+            "bash",
+            "run_terminal_command",
+            "lsp",
+        ],
         keep_servers: &["lsp"],
     },
     ToolPackLabelRule {
         label: "documentation",
         aliases: &["docs", "doc"],
-        keywords: &["document", "documentation", "readme", "docstring", "changelog", "write docs"],
-        keep_tools: &["read_file", "write", "edit", "search_replace", "glob", "list_dir"],
+        keywords: &[
+            "document",
+            "documentation",
+            "readme",
+            "docstring",
+            "changelog",
+            "write docs",
+        ],
+        keep_tools: &[
+            "read_file",
+            "write",
+            "edit",
+            "search_replace",
+            "glob",
+            "list_dir",
+        ],
         keep_servers: &["docs"],
     },
     ToolPackLabelRule {
         label: "git-operations",
         aliases: &["git", "vcs"],
-        keywords: &["git", "commit", "branch", "merge", "rebase", "diff", "stash", "checkout", "pull", "push"],
+        keywords: &[
+            "git", "commit", "branch", "merge", "rebase", "diff", "stash", "checkout", "pull",
+            "push",
+        ],
         keep_tools: &["bash", "run_terminal_command", "read_file"],
         keep_servers: &["github", "gitlab", "git"],
     },
     ToolPackLabelRule {
         label: "database",
         aliases: &["db", "sql"],
-        keywords: &["database", "sql", "postgres", "mysql", "sqlite", "migration", "schema", "query", "table"],
+        keywords: &[
+            "database",
+            "sql",
+            "postgres",
+            "mysql",
+            "sqlite",
+            "migration",
+            "schema",
+            "query",
+            "table",
+        ],
         keep_tools: &["bash", "run_terminal_command", "read_file", "write"],
-        keep_servers: &["postgres", "mysql", "sqlite", "database", "db", "supabase", "neon"],
+        keep_servers: &[
+            "postgres", "mysql", "sqlite", "database", "db", "supabase", "neon",
+        ],
     },
     ToolPackLabelRule {
         label: "api-development",
         aliases: &["api", "rest", "endpoint"],
-        keywords: &["api", "endpoint", "rest", "graphql", "route", "handler", "webhook", "openapi"],
-        keep_tools: &["read_file", "edit", "write", "bash", "run_terminal_command", "web_fetch"],
+        keywords: &[
+            "api", "endpoint", "rest", "graphql", "route", "handler", "webhook", "openapi",
+        ],
+        keep_tools: &[
+            "read_file",
+            "edit",
+            "write",
+            "bash",
+            "run_terminal_command",
+            "web_fetch",
+        ],
         keep_servers: &["api", "postman", "http"],
     },
     ToolPackLabelRule {
         label: "web-search",
         aliases: &["search", "research"],
-        keywords: &["search the web", "look up", "research", "find documentation", "what is", "how to", "latest", "news"],
+        keywords: &[
+            "search the web",
+            "look up",
+            "research",
+            "find documentation",
+            "what is",
+            "how to",
+            "latest",
+            "news",
+        ],
         keep_tools: &["web_search", "web_fetch"],
         keep_servers: &["web", "search", "tavily", "brave"],
     },
     ToolPackLabelRule {
         label: "file-operations",
         aliases: &["files", "filesystem"],
-        keywords: &["file", "files", "directory", "folder", "move", "copy", "delete", "rename file", "list"],
-        keep_tools: &["glob", "list_dir", "read_file", "write", "bash", "run_terminal_command"],
+        keywords: &[
+            "file",
+            "files",
+            "directory",
+            "folder",
+            "move",
+            "copy",
+            "delete",
+            "rename file",
+            "list",
+        ],
+        keep_tools: &[
+            "glob",
+            "list_dir",
+            "read_file",
+            "write",
+            "bash",
+            "run_terminal_command",
+        ],
         keep_servers: &["filesystem", "files"],
     },
     ToolPackLabelRule {
         label: "build",
         aliases: &["compile", "packaging"],
-        keywords: &["build", "compile", "bundle", "webpack", "vite", "tsc", "make", "cargo build", "gradle"],
-        keep_tools: &["bash", "run_terminal_command", "read_file", "grep", "grep_files"],
+        keywords: &[
+            "build",
+            "compile",
+            "bundle",
+            "webpack",
+            "vite",
+            "tsc",
+            "make",
+            "cargo build",
+            "gradle",
+        ],
+        keep_tools: &[
+            "bash",
+            "run_terminal_command",
+            "read_file",
+            "grep",
+            "grep_files",
+        ],
         keep_servers: &["build", "ci"],
     },
     ToolPackLabelRule {
         label: "deployment",
         aliases: &["deploy", "release"],
-        keywords: &["deploy", "deployment", "release", "publish", "docker", "kubernetes", "k8s", "terraform", "ci/cd", "pipeline"],
+        keywords: &[
+            "deploy",
+            "deployment",
+            "release",
+            "publish",
+            "docker",
+            "kubernetes",
+            "k8s",
+            "terraform",
+            "ci/cd",
+            "pipeline",
+        ],
         keep_tools: &["bash", "run_terminal_command", "read_file", "write"],
-        keep_servers: &["docker", "k8s", "kubernetes", "deploy", "aws", "gcp", "azure", "fly", "vercel"],
+        keep_servers: &[
+            "docker",
+            "k8s",
+            "kubernetes",
+            "deploy",
+            "aws",
+            "gcp",
+            "azure",
+            "fly",
+            "vercel",
+        ],
     },
     ToolPackLabelRule {
         label: "performance",
         aliases: &["perf", "optimization"],
-        keywords: &["performance", "optimize", "optimization", "slow", "latency", "profile", "benchmark", "memory leak"],
-        keep_tools: &["read_file", "bash", "run_terminal_command", "grep", "grep_files", "lsp"],
+        keywords: &[
+            "performance",
+            "optimize",
+            "optimization",
+            "slow",
+            "latency",
+            "profile",
+            "benchmark",
+            "memory leak",
+        ],
+        keep_tools: &[
+            "read_file",
+            "bash",
+            "run_terminal_command",
+            "grep",
+            "grep_files",
+            "lsp",
+        ],
         keep_servers: &["perf", "profil"],
     },
     ToolPackLabelRule {
         label: "security",
         aliases: &["sec", "vulnerability"],
-        keywords: &["security", "vulnerability", "cve", "exploit", "audit", "permission", "auth", "authentication", "secret"],
-        keep_tools: &["read_file", "grep", "grep_files", "bash", "run_terminal_command"],
+        keywords: &[
+            "security",
+            "vulnerability",
+            "cve",
+            "exploit",
+            "audit",
+            "permission",
+            "auth",
+            "authentication",
+            "secret",
+        ],
+        keep_tools: &[
+            "read_file",
+            "grep",
+            "grep_files",
+            "bash",
+            "run_terminal_command",
+        ],
         keep_servers: &["security", "snyk", "audit"],
     },
     ToolPackLabelRule {
         label: "data-analysis",
         aliases: &["data", "analytics"],
-        keywords: &["data", "csv", "dataframe", "pandas", "analyze", "statistics", "chart", "plot"],
+        keywords: &[
+            "data",
+            "csv",
+            "dataframe",
+            "pandas",
+            "analyze",
+            "statistics",
+            "chart",
+            "plot",
+        ],
         keep_tools: &["read_file", "write", "bash", "run_terminal_command", "glob"],
         keep_servers: &["data", "analytics", "notebook"],
     },
     ToolPackLabelRule {
         label: "ui-development",
         aliases: &["ui", "frontend", "ux"],
-        keywords: &["ui", "frontend", "component", "css", "style", "layout", "button", "page", "screen", "design system"],
-        keep_tools: &["read_file", "edit", "write", "glob", "grep", "grep_files", "image_gen", "image_edit"],
+        keywords: &[
+            "ui",
+            "frontend",
+            "component",
+            "css",
+            "style",
+            "layout",
+            "button",
+            "page",
+            "screen",
+            "design system",
+        ],
+        keep_tools: &[
+            "read_file",
+            "edit",
+            "write",
+            "glob",
+            "grep",
+            "grep_files",
+            "image_gen",
+            "image_edit",
+        ],
         keep_servers: &["ui", "figma", "storybook"],
     },
     ToolPackLabelRule {
         label: "media",
         aliases: &["image", "video", "audio"],
-        keywords: &["image", "video", "audio", "generate", "edit image", "thumbnail", "poster", "artwork"],
-        keep_tools: &["image_gen", "image_edit", "read_file", "write", "bash", "run_terminal_command"],
+        keywords: &[
+            "image",
+            "video",
+            "audio",
+            "generate",
+            "edit image",
+            "thumbnail",
+            "poster",
+            "artwork",
+        ],
+        keep_tools: &[
+            "image_gen",
+            "image_edit",
+            "read_file",
+            "write",
+            "bash",
+            "run_terminal_command",
+        ],
         keep_servers: &["media", "image", "video"],
     },
     ToolPackLabelRule {
         label: "planning",
         aliases: &["plan", "design"],
-        keywords: &["plan", "planning", "design", "architecture", "proposal", "roadmap", "spec", "specification"],
-        keep_tools: &["read_file", "glob", "list_dir", "grep", "grep_files", "write", "todo_write"],
+        keywords: &[
+            "plan",
+            "planning",
+            "design",
+            "architecture",
+            "proposal",
+            "roadmap",
+            "spec",
+            "specification",
+        ],
+        keep_tools: &[
+            "read_file",
+            "glob",
+            "list_dir",
+            "grep",
+            "grep_files",
+            "write",
+            "todo_write",
+        ],
         keep_servers: &["plan", "notion", "linear"],
     },
     ToolPackLabelRule {
         label: "memory",
         aliases: &["recall", "remember"],
-        keywords: &["remember", "recall", "memory", "what did we", "last time", "previous session", "notes"],
+        keywords: &[
+            "remember",
+            "recall",
+            "memory",
+            "what did we",
+            "last time",
+            "previous session",
+            "notes",
+        ],
         keep_tools: &["memory_search", "memory_get", "read_file", "write"],
         keep_servers: &["memory"],
     },
     ToolPackLabelRule {
         label: "scheduling",
         aliases: &["schedule", "cron", "reminder"],
-        keywords: &["schedule", "cron", "reminder", "recurring", "every day", "daily", "weekly", "at 9am"],
-        keep_tools: &["scheduler_list", "scheduler_delete", "read_file", "write", "bash", "run_terminal_command"],
+        keywords: &[
+            "schedule",
+            "cron",
+            "reminder",
+            "recurring",
+            "every day",
+            "daily",
+            "weekly",
+            "at 9am",
+        ],
+        keep_tools: &[
+            "scheduler_list",
+            "scheduler_delete",
+            "read_file",
+            "write",
+            "bash",
+            "run_terminal_command",
+        ],
         keep_servers: &["scheduler", "cron", "calendar"],
     },
 ];
@@ -324,6 +608,10 @@ pub struct ComputeToolShortlistInput<'a> {
     pub task_text: &'a str,
     pub tier: Option<&'a str>,
     pub confidence: Option<f64>,
+    /// Optional override for the pruning confidence threshold. Values
+    /// outside 0.0-1.0 are ignored; defaults to
+    /// [`TOOL_PACK_PRUNE_CONFIDENCE_THRESHOLD`] (0.6).
+    pub confidence_threshold: Option<f64>,
     /// Config-level prune switch (`mcp_pruning`); `Some(false)` disables.
     pub prune_config_enabled: Option<bool>,
     /// When set, forces the full tool list with this reason (e.g. a
@@ -377,26 +665,27 @@ fn full_tool_shortlist(
 /// the full tool list.
 pub fn compute_tool_shortlist(input: ComputeToolShortlistInput<'_>) -> ToolShortlist {
     let labels = resolve_active_labels(input.task_labels, input.task_text);
-    let full = |reason: String| {
-        full_tool_shortlist(input.tools, labels.clone(), input.confidence, reason)
-    };
+    let full =
+        |reason: String| full_tool_shortlist(input.tools, labels.clone(), input.confidence, reason);
 
     if let Some(reason) = input.force_full_reason {
         return full(format!("force-full: {reason}"));
     }
     if (input.get_env)(TOOL_PACK_PRUNE_KILL_SWITCH_ENV).as_deref() == Some("0") {
-        return full(format!(
-            "kill-switch {TOOL_PACK_PRUNE_KILL_SWITCH_ENV}=0"
-        ));
+        return full(format!("kill-switch {TOOL_PACK_PRUNE_KILL_SWITCH_ENV}=0"));
     }
     if input.prune_config_enabled == Some(false) {
         return full("config prune disabled".to_string());
     }
+    let threshold = input
+        .confidence_threshold
+        .filter(|t| (0.0..=1.0).contains(t))
+        .unwrap_or(TOOL_PACK_PRUNE_CONFIDENCE_THRESHOLD);
     let confidence = match input.confidence {
-        Some(c) if c >= TOOL_PACK_PRUNE_CONFIDENCE_THRESHOLD => c,
+        Some(c) if c >= threshold => c,
         _ => {
             return full(format!(
-                "low confidence or missing route (threshold {TOOL_PACK_PRUNE_CONFIDENCE_THRESHOLD})"
+                "low confidence or missing route (threshold {threshold})"
             ));
         }
     };
@@ -536,6 +825,10 @@ pub struct ComputeServerShortlistInput<'a> {
     pub task_text: &'a str,
     pub tier: Option<&'a str>,
     pub confidence: Option<f64>,
+    /// Optional override for the pruning confidence threshold. Values
+    /// outside 0.0-1.0 are ignored; defaults to
+    /// [`TOOL_PACK_PRUNE_CONFIDENCE_THRESHOLD`] (0.6).
+    pub confidence_threshold: Option<f64>,
     pub prune_config_enabled: Option<bool>,
     pub force_full_reason: Option<&'a str>,
     pub get_env: EnvReader<'a>,
@@ -570,18 +863,20 @@ pub fn compute_server_shortlist(input: ComputeServerShortlistInput<'_>) -> Serve
         return full(format!("force-full: {reason}"));
     }
     if (input.get_env)(TOOL_PACK_PRUNE_KILL_SWITCH_ENV).as_deref() == Some("0") {
-        return full(format!(
-            "kill-switch {TOOL_PACK_PRUNE_KILL_SWITCH_ENV}=0"
-        ));
+        return full(format!("kill-switch {TOOL_PACK_PRUNE_KILL_SWITCH_ENV}=0"));
     }
     if input.prune_config_enabled == Some(false) {
         return full("config prune disabled".to_string());
     }
+    let threshold = input
+        .confidence_threshold
+        .filter(|t| (0.0..=1.0).contains(t))
+        .unwrap_or(TOOL_PACK_PRUNE_CONFIDENCE_THRESHOLD);
     let confidence = match input.confidence {
-        Some(c) if c >= TOOL_PACK_PRUNE_CONFIDENCE_THRESHOLD => c,
+        Some(c) if c >= threshold => c,
         _ => {
             return full(format!(
-                "low confidence or missing route (threshold {TOOL_PACK_PRUNE_CONFIDENCE_THRESHOLD})"
+                "low confidence or missing route (threshold {threshold})"
             ));
         }
     };
@@ -601,9 +896,7 @@ pub fn compute_server_shortlist(input: ComputeServerShortlistInput<'_>) -> Serve
     let mut disallowed_servers: Vec<String> = Vec::new();
     for server in input.servers {
         let lowered = server.to_ascii_lowercase();
-        let is_kept = kept_substrings
-            .iter()
-            .any(|sub| lowered.contains(sub))
+        let is_kept = kept_substrings.iter().any(|sub| lowered.contains(sub))
             || !known_substrings.iter().any(|sub| lowered.contains(sub));
         if is_kept {
             keep_servers.push(server.clone());
@@ -656,6 +949,7 @@ mod tests {
             task_text: text,
             tier: Some("balanced"),
             confidence,
+            confidence_threshold: None,
             prune_config_enabled: Some(true),
             force_full_reason: None,
             get_env: &|_| None,
@@ -689,9 +983,7 @@ mod tests {
     fn kill_switch_disables_pruning() {
         let tools = tools_named(&["read_file", "image_gen", "bash"]);
         let labels: Vec<String> = vec!["testing".to_string()];
-        let get_env = |k: &str| {
-            (k == TOOL_PACK_PRUNE_KILL_SWITCH_ENV).then(|| "0".to_string())
-        };
+        let get_env = |k: &str| (k == TOOL_PACK_PRUNE_KILL_SWITCH_ENV).then(|| "0".to_string());
         let shortlist = compute_tool_shortlist(ComputeToolShortlistInput {
             get_env: &get_env,
             ..input(&tools, &labels, "run the tests", Some(0.95))
@@ -758,7 +1050,12 @@ mod tests {
         let tools = tools_named(&["read_file", "mysterybox__do_thing"]);
         let labels = vec!["testing".to_string()];
         let shortlist = compute_tool_shortlist(input(&tools, &labels, "run tests", Some(0.9)));
-        assert!(shortlist.keep_names.iter().any(|k| k == "mysterybox__do_thing"));
+        assert!(
+            shortlist
+                .keep_names
+                .iter()
+                .any(|k| k == "mysterybox__do_thing")
+        );
     }
 
     #[test]
@@ -766,11 +1063,18 @@ mod tests {
         let tools = tools_named(&["github__create_pr", "figma__get_design"]);
         let labels = vec!["code-review".to_string()];
         let shortlist = compute_tool_shortlist(input(&tools, &labels, "review the PR", Some(0.9)));
-        assert!(shortlist.keep_names.iter().any(|k| k == "github__create_pr"));
-        assert!(shortlist
-            .disallowed_names
-            .iter()
-            .any(|k| k == "figma__get_design"));
+        assert!(
+            shortlist
+                .keep_names
+                .iter()
+                .any(|k| k == "github__create_pr")
+        );
+        assert!(
+            shortlist
+                .disallowed_names
+                .iter()
+                .any(|k| k == "figma__get_design")
+        );
     }
 
     #[test]
@@ -789,7 +1093,11 @@ mod tests {
     #[test]
     fn missed_call_detection_requires_sent_and_disallowed() {
         let missed = detect_tool_pack_missed_calls(
-            &["lsp".to_string(), "read_file".to_string(), "lsp".to_string()],
+            &[
+                "lsp".to_string(),
+                "read_file".to_string(),
+                "lsp".to_string(),
+            ],
             &["read_file".to_string()],
             &["lsp".to_string(), "image_gen".to_string()],
         );
@@ -799,24 +1107,27 @@ mod tests {
 
     #[test]
     fn no_miss_when_pack_was_full() {
-        let missed = detect_tool_pack_missed_calls(
-            &["lsp".to_string()],
-            &["lsp".to_string()],
-            &[],
-        );
+        let missed = detect_tool_pack_missed_calls(&["lsp".to_string()], &["lsp".to_string()], &[]);
         assert!(missed.is_empty());
     }
 
     #[test]
     fn recovery_reminder_names_the_tools() {
-        let body = build_tool_pack_recovery_reminder_body(&["lsp".to_string(), "figma__get_design".to_string()]);
+        let body = build_tool_pack_recovery_reminder_body(&[
+            "lsp".to_string(),
+            "figma__get_design".to_string(),
+        ]);
         assert!(body.contains("lsp") && body.contains("figma__get_design"));
         assert!(body.contains("call it again"));
     }
 
     #[test]
     fn server_shortlist_prunes_irrelevant_known_servers() {
-        let servers = vec!["github".to_string(), "figma".to_string(), "mystery".to_string()];
+        let servers = vec![
+            "github".to_string(),
+            "figma".to_string(),
+            "mystery".to_string(),
+        ];
         let labels = vec!["code-review".to_string()];
         let result = compute_server_shortlist(ComputeServerShortlistInput {
             servers: &servers,
@@ -824,6 +1135,7 @@ mod tests {
             task_text: "review the PR",
             tier: Some("balanced"),
             confidence: Some(0.9),
+            confidence_threshold: None,
             prune_config_enabled: Some(true),
             force_full_reason: None,
             get_env: &|_| None,
@@ -843,8 +1155,10 @@ mod tests {
             params_json: "y".repeat(400),
             ..tool("b")
         };
-        assert!(estimate_tool_schema_tokens(std::slice::from_ref(&big))
-            > estimate_tool_schema_tokens(std::slice::from_ref(&small)));
+        assert!(
+            estimate_tool_schema_tokens(std::slice::from_ref(&big))
+                > estimate_tool_schema_tokens(std::slice::from_ref(&small))
+        );
     }
 
     #[test]

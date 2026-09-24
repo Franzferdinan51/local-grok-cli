@@ -21,8 +21,8 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::effort::{is_plan_then_execute_eligible, EffortBehaviorPolicy};
-use crate::{is_env_disabled, EnvReader};
+use crate::effort::{EffortBehaviorPolicy, is_plan_then_execute_eligible};
+use crate::{EnvReader, is_env_disabled};
 
 /// Kill switch / explicit gate env. Falsy spellings (`0/false/no/off`)
 /// disable plan-then-execute.
@@ -140,7 +140,11 @@ pub fn count_file_mentions(task_text: &str) -> usize {
         .chain(BARE_FILE_RE.captures_iter(task_text))
     {
         if let Some(m) = captures.get(0).or_else(|| captures.get(1)) {
-            distinct.insert(m.as_str().trim_matches(|c| "(\"'`".contains(c)).to_ascii_lowercase());
+            distinct.insert(
+                m.as_str()
+                    .trim_matches(|c| "(\"'`".contains(c))
+                    .to_ascii_lowercase(),
+            );
         }
     }
     distinct.len()
@@ -157,7 +161,8 @@ fn has_multi_file_signals(task_text: &str) -> bool {
 /// policy → risky labels (confidence ≥ 0.6) → multi-file signals
 /// (confidence ≥ 0.6) → direct. Never panics; any uncertainty → direct.
 pub fn decide_plan_then_execute(input: PlanExecuteGateInput<'_>) -> PlanExecuteGateDecision {
-    let decide = |plan: bool, reason: PlanExecuteGateReason| PlanExecuteGateDecision { plan, reason };
+    let decide =
+        |plan: bool, reason: PlanExecuteGateReason| PlanExecuteGateDecision { plan, reason };
 
     if is_plan_then_execute_disabled(input.get_env) {
         return decide(false, PlanExecuteGateReason::Disabled);
@@ -253,7 +258,9 @@ pub fn resolve_plan_execute_models(
         .filter(|id| is_usable_plan_execute_model(id))
         .collect();
     if usable.is_empty() {
-        return Err("plan-then-execute needs at least one usable locally-available model".to_string());
+        return Err(
+            "plan-then-execute needs at least one usable locally-available model".to_string(),
+        );
     }
 
     let preferred_in = |id: &str| usable.iter().any(|u| *u == id);
@@ -307,7 +314,10 @@ pub fn read_planner_budgets(get_env: EnvReader<'_>) -> (u32, u32) {
             .unwrap_or(default)
     };
     (
-        read("GROK_LOCAL_PLAN_EXECUTE_PLANNER_MAX_STEPS", DEFAULT_PLANNER_MAX_STEPS),
+        read(
+            "GROK_LOCAL_PLAN_EXECUTE_PLANNER_MAX_STEPS",
+            DEFAULT_PLANNER_MAX_STEPS,
+        ),
         read(
             "GROK_LOCAL_PLAN_EXECUTE_PLANNER_MAX_TOOL_CALLS",
             DEFAULT_PLANNER_MAX_TOOL_CALLS,
@@ -438,7 +448,10 @@ mod tests {
             Some(false),
             &get_env,
         ));
-        assert_eq!((d.plan, d.reason), (false, PlanExecuteGateReason::ConfigOff));
+        assert_eq!(
+            (d.plan, d.reason),
+            (false, PlanExecuteGateReason::ConfigOff)
+        );
 
         let low = crate::effort::default_policy(crate::effort::EffortTier::Low);
         let d = decide_plan_then_execute(gate_input(
@@ -569,12 +582,9 @@ mod tests {
     #[test]
     fn model_resolution_errors_when_nothing_usable() {
         let prefs = PlanExecuteModelPreferences::default();
-        let err = resolve_plan_execute_models(
-            &["text-embedding-3-small".to_string()],
-            None,
-            &prefs,
-        )
-        .unwrap_err();
+        let err =
+            resolve_plan_execute_models(&["text-embedding-3-small".to_string()], None, &prefs)
+                .unwrap_err();
         assert!(err.contains("usable"));
     }
 
@@ -582,9 +592,8 @@ mod tests {
     fn planner_budgets_default_and_env_override() {
         let get_env = |_: &str| None;
         assert_eq!(read_planner_budgets(&get_env), (12, 30));
-        let get_env = |k: &str| {
-            (k == "GROK_LOCAL_PLAN_EXECUTE_PLANNER_MAX_STEPS").then(|| "5".to_string())
-        };
+        let get_env =
+            |k: &str| (k == "GROK_LOCAL_PLAN_EXECUTE_PLANNER_MAX_STEPS").then(|| "5".to_string());
         assert_eq!(read_planner_budgets(&get_env).0, 5);
     }
 

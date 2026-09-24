@@ -33,7 +33,10 @@ fn visit(dir: &Path, hits: &mut Vec<String>) {
             continue;
         };
         for forbidden in FORBIDDEN {
-            if text.to_ascii_lowercase().contains(&forbidden.to_ascii_lowercase()) {
+            if text
+                .to_ascii_lowercase()
+                .contains(&forbidden.to_ascii_lowercase())
+            {
                 hits.push(format!("{} references {:?}", path.display(), forbidden));
             }
         }

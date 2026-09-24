@@ -10,7 +10,7 @@
 
 use serde::Deserialize;
 
-use crate::{parse_bool_env, EnvReader};
+use crate::{EnvReader, parse_bool_env};
 
 /// One of the five behavior policy tiers. `thinking off` / `none` map to
 /// [`EffortTier::Low`] (minimal agent behavior), matching ZCode's
@@ -292,7 +292,10 @@ pub fn is_plan_then_execute_eligible(
     policy: Option<&EffortBehaviorPolicy>,
     route_tier: Option<&str>,
 ) -> bool {
-    if policy.map(|p| p.plan_then_execute_eligible).unwrap_or(false) {
+    if policy
+        .map(|p| p.plan_then_execute_eligible)
+        .unwrap_or(false)
+    {
         return true;
     }
     matches!(
@@ -400,7 +403,10 @@ mod tests {
 
     #[test]
     fn subagent_allowance_parse() {
-        assert_eq!(SubagentAllowance::parse("never"), Some(SubagentAllowance::Never));
+        assert_eq!(
+            SubagentAllowance::parse("never"),
+            Some(SubagentAllowance::Never)
+        );
         assert_eq!(
             SubagentAllowance::parse("Conservative"),
             Some(SubagentAllowance::Conservative)

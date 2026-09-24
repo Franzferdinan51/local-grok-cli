@@ -435,7 +435,11 @@ impl SessionActor {
         };
 
         let plan_active = self.plan_mode.lock().is_active();
-        filter_cursor_tools_by_plan_mode(defs, plan_active)
+        let defs = filter_cursor_tools_by_plan_mode(defs, plan_active);
+        // Agent-flow tool shortlist: label-driven pruning plus hiding the
+        // Task tool when the effort tier forbids subagents. Fail-open
+        // when disabled or when the route carried no usable signal.
+        self.agentflow_turn.lock().filter_tool_definitions(defs)
     }
 
     /// Messages-backed models never see `use_tool`'s file forms: the Anthropic Messages API rejects the schema's

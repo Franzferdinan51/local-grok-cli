@@ -3714,6 +3714,18 @@ impl SessionActor {
                 step_problematic,
                 is_true_noop,
             );
+            // Agent-flow doom-loop ladder (normalized fingerprints).
+            // Each stage fires at most once per streak; the stationarity
+            // system above stays on as the final safety net.
+            for tc in &tool_calls {
+                if let Some(body) = self
+                    .agentflow_turn
+                    .lock()
+                    .observe_tool_call(&tc.name, tc.arguments.as_ref())
+                {
+                    self.push_system_reminder(&body);
+                }
+            }
             if is_true_noop {
                 xai_grok_telemetry::session_ctx::log_event(
                     xai_grok_telemetry::events::ShellTrueNoop {
@@ -3791,6 +3803,25 @@ impl SessionActor {
                     "max-turns limit reached, stopping"
                 );
                 return Ok(TurnOutcome::MaxTurnsReached { limit });
+            }
+            // Agent-flow budget ladder: warn at 80%, escalate at the cap
+            // (one extra step granted), stop when still over cap.
+            // Fail-open when disabled or unconfigured.
+            if let Some(fired) = self.agentflow_turn.lock().check_budget(
+                next_turn as u64,
+                self.events.tool_count_this_turn() as u64,
+            ) {
+                self.push_system_reminder(&fired.body);
+                if fired.kind == AgentFlowBudgetKind::Stop {
+                    tracing::info!(
+                        session_id = %self.session_info.id,
+                        tool_turn_count,
+                        "agentflow budget exhausted, stopping"
+                    );
+                    return Ok(TurnOutcome::MaxTurnsReached {
+                        limit: fired.cap_steps.unwrap_or(next_turn),
+                    });
+                }
             }
             tool_turn_count = next_turn;
             if self.tool_context.task_output_token_budget.is_none()

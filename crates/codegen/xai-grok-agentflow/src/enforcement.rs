@@ -12,8 +12,8 @@
 //! precedence is enforced by the caller when it resolves the effective
 //! limit. The whole ladder is disabled by `GROK_LOCAL_BUDGET_ENFORCE=0`.
 
-use crate::budgets::{check_budget_hit, warn_threshold, BudgetHit, BudgetUsage, TurnBudgets};
 use crate::EnvReader;
+use crate::budgets::{BudgetHit, BudgetUsage, TurnBudgets, check_budget_hit, warn_threshold};
 
 /// Warning is injected once at ceil(80%) of the cap.
 pub const BUDGET_WARN_FRACTION: f64 = 0.8;
@@ -134,7 +134,9 @@ pub fn build_budget_warning_body(ctx: &BudgetMessageContext) -> String {
         ctx.steps,
         ctx.max_steps.map(|n| n.to_string()).unwrap_or_default(),
         ctx.tool_calls,
-        ctx.max_tool_calls.map(|n| n.to_string()).unwrap_or_default(),
+        ctx.max_tool_calls
+            .map(|n| n.to_string())
+            .unwrap_or_default(),
         cap_line(ctx.max_steps, ctx.max_tool_calls),
         ctx.tier.as_deref().unwrap_or("routed")
     )
@@ -150,7 +152,9 @@ pub fn build_budget_escalation_body(ctx: &BudgetMessageContext) -> String {
         ctx.steps,
         ctx.max_steps.map(|n| n.to_string()).unwrap_or_default(),
         ctx.tool_calls,
-        ctx.max_tool_calls.map(|n| n.to_string()).unwrap_or_default(),
+        ctx.max_tool_calls
+            .map(|n| n.to_string())
+            .unwrap_or_default(),
         cap_line(ctx.max_steps, ctx.max_tool_calls)
     )
 }
@@ -167,7 +171,9 @@ pub fn build_budget_exhausted_body(ctx: &BudgetMessageContext) -> String {
         ctx.steps,
         ctx.max_steps.map(|n| n.to_string()).unwrap_or_default(),
         ctx.tool_calls,
-        ctx.max_tool_calls.map(|n| n.to_string()).unwrap_or_default(),
+        ctx.max_tool_calls
+            .map(|n| n.to_string())
+            .unwrap_or_default(),
         cap_line(ctx.max_steps, ctx.max_tool_calls)
     )
 }
@@ -265,7 +271,10 @@ mod tests {
     fn empty_budget_never_fires() {
         let stage = BudgetStageState::default();
         for usage in [
-            BudgetUsage { steps: 0, tool_calls: 0 },
+            BudgetUsage {
+                steps: 0,
+                tool_calls: 0,
+            },
             BudgetUsage {
                 steps: 10_000,
                 tool_calls: 10_000,

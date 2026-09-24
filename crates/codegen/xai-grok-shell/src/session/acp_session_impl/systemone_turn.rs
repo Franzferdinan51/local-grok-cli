@@ -119,8 +119,14 @@ impl super::SessionActor {
             decision.confidence.unwrap_or(0.0),
             decision.model_id.as_deref().unwrap_or("-"),
         );
-        self.apply_systemone_decision(&decision, thinking_mode, thinking_applied, model_selection)
-            .await;
+        self.apply_systemone_decision(
+            &decision,
+            &text,
+            thinking_mode,
+            thinking_applied,
+            model_selection,
+        )
+        .await;
         // Record what this turn ran with for the TUI (file-based, fail-open).
         LastRoute::capture(&decision, thinking_mode, thinking_applied, model_selection).store();
     }
@@ -129,6 +135,7 @@ impl super::SessionActor {
     async fn apply_systemone_decision(
         self: &Arc<Self>,
         decision: &xai_grok_systemone::RouteDecision,
+        prompt_text: &str,
         thinking_mode: ThinkingMode,
         thinking_applied: Effort,
         model_selection: ModelSelection,
@@ -174,6 +181,17 @@ impl super::SessionActor {
             self.systemone_turn.lock().router_max_turns = Some(decision.max_turns as usize);
         }
 
+        // --- Agent-flow: resolve the route into per-turn policy (budgets,
+        // tool shortlist state, plan gate, subagent guidance, doom-loop
+        // ladder). Fail-open: inert when disabled. Never touches models.
+        let agentflow_outcome = self
+            .agentflow_turn
+            .lock()
+            .apply_route_decision(decision, prompt_text, &self.session_info.id.0);
+        for reminder in &agentflow_outcome.reminders {
+            self.push_system_reminder(reminder);
+        }
+
         // --- Evidence for the session log. ---
         xai_grok_telemetry::unified_log::info(
             "shell.systemone.route",
@@ -186,6 +204,7 @@ impl super::SessionActor {
                 "model_selection": model_selection.as_str(),
                 "model_advisory": decision.model_id,
                 "max_turns": decision.max_turns,
+                "agentflow_max_turns": agentflow_outcome.max_turns_cap,
                 "source": decision.source.as_str(),
                 "confidence": decision.confidence.unwrap_or(0.0),
             })),

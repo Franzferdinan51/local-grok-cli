@@ -17,7 +17,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::{is_env_disabled, EnvReader};
+use crate::{EnvReader, is_env_disabled};
 
 /// Kill switch / explicit gate env. Falsy spellings (`0/false/no/off`)
 /// disable doom-loop escalation.
@@ -167,9 +167,9 @@ fn collapse_dot_segments(path: &str) -> String {
 pub fn normalize_doom_loop_value(value: serde_json::Value) -> serde_json::Value {
     match value {
         serde_json::Value::String(s) => serde_json::Value::String(normalize_doom_loop_string(&s)),
-        serde_json::Value::Array(items) => serde_json::Value::Array(
-            items.into_iter().map(normalize_doom_loop_value).collect(),
-        ),
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.into_iter().map(normalize_doom_loop_value).collect())
+        }
         serde_json::Value::Object(map) => {
             let sorted: BTreeMap<String, serde_json::Value> = map
                 .into_iter()
@@ -555,7 +555,9 @@ mod tests {
 
     #[test]
     fn doom_loop_kill_switch_spelling() {
-        assert!(is_doom_loop_disabled(&|k| (k == DOOM_LOOP_ENV).then(|| "off".to_string())));
+        assert!(is_doom_loop_disabled(
+            &|k| (k == DOOM_LOOP_ENV).then(|| "off".to_string())
+        ));
         assert!(!is_doom_loop_disabled(&|_| None));
     }
 }

@@ -92,6 +92,9 @@ mod compaction_segments;
 mod types;
 pub(crate) use types::*;
 pub use types::{TodoGateDecision, TodoGateReason};
+#[path = "agentflow_turn.rs"]
+mod agentflow_turn;
+pub(crate) use agentflow_turn::{AgentFlowBudgetFired, AgentFlowBudgetKind, AgentFlowTurnState};
 #[path = "acp_session_impl/goal.rs"]
 mod goal;
 #[path = "acp_session_impl/named_workflow_args.rs"]
@@ -847,6 +850,10 @@ pub(crate) struct SessionActor {
     /// Native SystemOne per-turn routing state (effort auto-tune + turn budget).
     /// Fail-open: the router only fills this in on live decisions.
     pub(crate) systemone_turn: parking_lot::Mutex<SystemOneTurnState>,
+    /// Agent-flow per-turn policy state (budgets, tool shortlist, doom-loop
+    /// ladder, plan gate). Fail-open: resolved from the SystemOne route
+    /// decision each turn; inert when agent-flow is disabled.
+    pub(crate) agentflow_turn: parking_lot::Mutex<AgentFlowTurnState>,
     /// Pending mid-turn interjections from the user (Ctrl+Enter).
     /// Pushed by `SessionCommand::Interject` handler, drained at safe points in `process_conversation_turn`.
     /// Internally synchronized.

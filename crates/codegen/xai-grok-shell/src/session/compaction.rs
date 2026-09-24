@@ -979,7 +979,7 @@ impl SessionActor {
                 is_subagent: self.startup_hints.is_subagent,
             },
         );
-        let user_context = self.merge_goal_compaction_user_context(user_context);
+        let mut user_context = self.merge_goal_compaction_user_context(user_context);
         let compact_source = trigger_str;
         self.dispatch_hook(
             xai_grok_hooks::event::HookEventName::PreCompact,

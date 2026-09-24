@@ -38,6 +38,7 @@ pub mod doom_loop;
 pub mod effort;
 pub mod enforcement;
 pub mod plan_execute;
+pub mod subagents;
 pub mod tool_packs;
 
 /// Reads one environment variable. Production code passes

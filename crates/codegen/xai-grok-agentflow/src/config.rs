@@ -34,9 +34,11 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use crate::budgets::{resolve_env_turn_budgets, TurnBudgets};
-use crate::effort::{default_policy, policy_for_tier, EffortBehaviorPolicy, EffortTier, EffortTierOverrides};
-use crate::{is_env_disabled, EnvReader};
+use crate::budgets::{TurnBudgets, resolve_env_turn_budgets};
+use crate::effort::{
+    EffortBehaviorPolicy, EffortTier, EffortTierOverrides, default_policy, policy_for_tier,
+};
+use crate::{EnvReader, is_env_disabled};
 
 fn default_true() -> bool {
     true
@@ -327,9 +329,8 @@ mod tests {
         assert_eq!(budgets.max_tool_calls, Some(250));
 
         // Env beats TOML.
-        let get_env = |k: &str| {
-            (k == "GROK_LOCAL_BUDGET_HEAVY_MAX_STEPS").then(|| "11".to_string())
-        };
+        let get_env =
+            |k: &str| (k == "GROK_LOCAL_BUDGET_HEAVY_MAX_STEPS").then(|| "11".to_string());
         let budgets = config.resolve_budgets(Some("heavy"), Some("xhigh"), &get_env);
         assert_eq!(budgets.max_steps, Some(11));
     }

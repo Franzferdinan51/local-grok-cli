@@ -66,10 +66,7 @@ fn env_tier_key(route_tier: Option<&str>) -> Option<&'static str> {
 /// Resolves the env-driven portion of the turn budgets: per-tier override
 /// first, then the default. TOML and policy layers are applied by the caller
 /// ([`crate::config::AgentFlowConfig::resolve_budgets`]).
-pub fn resolve_env_turn_budgets(
-    route_tier: Option<&str>,
-    get_env: EnvReader<'_>,
-) -> TurnBudgets {
+pub fn resolve_env_turn_budgets(route_tier: Option<&str>, get_env: EnvReader<'_>) -> TurnBudgets {
     let tier_key = env_tier_key(route_tier);
     let pick = |dimension: &str| -> Option<u32> {
         if let Some(tier) = tier_key {

@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use regex::Regex;
 
-use crate::{is_env_disabled, EnvReader};
+use crate::{EnvReader, is_env_disabled};
 
 /// Kill switch / explicit gate env. Falsy spellings (`0/false/no/off`)
 /// disable anchored compaction.
@@ -100,11 +100,11 @@ static ERROR_RE: LazyLock<Regex> = LazyLock::new(|| {
         .expect("error regex")
 });
 static TODO_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?im)^\s*[-*]\s*\[[ x]\].*$|^\s*todo\s*:.*$|\btodo\b.{0,80}")
-        .expect("todo regex")
+    Regex::new(r"(?im)^\s*[-*]\s*\[[ x]\].*$|^\s*todo\s*:.*$|\btodo\b.{0,80}").expect("todo regex")
 });
 static ANCHOR_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?:^|[\s("'`])((?:[~.]?/)?[\w.~-]+(?:/[\w.~-]+)+\.\w+)"#).expect("anchor path regex")
+    Regex::new(r#"(?:^|[\s("'`])((?:[~.]?/)?[\w.~-]+(?:/[\w.~-]+)+\.\w+)"#)
+        .expect("anchor path regex")
 });
 static ANCHOR_FILE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)[\w.~-]+\.(?:ts|tsx|js|mjs|cjs|json|md|py|rs|go|java|rb|toml|yaml|yml|cs|swift|kt|css|html)")
@@ -166,10 +166,7 @@ pub fn extract_transcript_anchors(transcript_text: &str) -> TranscriptAnchors {
         .chain(ANCHOR_FILE_RE.captures_iter(transcript_text))
     {
         if let Some(m) = captures.get(1).or_else(|| captures.get(0)) {
-            let path = m
-                .as_str()
-                .trim_matches(|c| "(\"'`".contains(c))
-                .to_string();
+            let path = m.as_str().trim_matches(|c| "(\"'`".contains(c)).to_string();
             if !path.is_empty() && seen_paths.insert(path.clone()) {
                 file_paths.push(path);
             }
@@ -244,7 +241,10 @@ pub fn archive_transcript(
             "text": text,
         })).collect::<Vec<_>>(),
     });
-    std::fs::write(&path, serde_json::to_string_pretty(&payload).unwrap_or_default())?;
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&payload).unwrap_or_default(),
+    )?;
     Ok(path)
 }
 
@@ -453,7 +453,10 @@ mod tests {
             Some(BoundaryCompactEventKind::SubtaskVerified)
         );
         assert_eq!(
-            detect_boundary_event_from_tool_call("todo_write", r#"{"todos":[{"status":"in_progress"}]}"#),
+            detect_boundary_event_from_tool_call(
+                "todo_write",
+                r#"{"todos":[{"status":"in_progress"}]}"#
+            ),
             None
         );
         assert_eq!(
@@ -464,7 +467,10 @@ mod tests {
             detect_boundary_event_from_tool_call("bash", r#"{"command":"ls /tmp"}"#),
             None
         );
-        assert_eq!(detect_boundary_event_from_tool_call("read", r#"{"path":"a"}"#), None);
+        assert_eq!(
+            detect_boundary_event_from_tool_call("read", r#"{"path":"a"}"#),
+            None
+        );
     }
 
     #[test]
@@ -483,7 +489,8 @@ mod tests {
 
     #[test]
     fn anchored_compact_kill_switch_spelling() {
-        assert!(is_anchored_compaction_disabled(&|k| (k == ANCHORED_COMPACT_ENV)
+        assert!(is_anchored_compaction_disabled(&|k| (k
+            == ANCHORED_COMPACT_ENV)
             .then(|| "0".to_string())));
         assert!(!is_anchored_compaction_disabled(&|_| None));
     }

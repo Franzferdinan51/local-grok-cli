@@ -1888,6 +1888,7 @@ pub(crate) async fn spawn_session_actor(
         ),
         max_turns,
         systemone_turn: Mutex::new(SystemOneTurnState::default()),
+        agentflow_turn: Mutex::new(AgentFlowTurnState::default()),
         max_retries: resolved_max_retries,
         rate_limit_waits: RateLimitWaitConfig::with_max_attempts(subagent_rate_limit_max_attempts),
         pending_interjections: InterjectionBuffer::new(),
