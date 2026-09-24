@@ -172,7 +172,7 @@ The user guide ships with the pager crate:
 — getting started, keyboard shortcuts, slash commands, configuration, theming,
 MCP servers, skills, plugins, hooks, headless mode, sandboxing, and more.
 
-## SystemOne native routing (v0.5.1)
+## SystemOne native routing (v0.5.2)
 
 Two independent selectors, settable per session or per CLI invocation:
 
@@ -225,13 +225,36 @@ The selectors are also settable via env: `GROK_LOCAL_SYSTEMONE_THINKING`
 `GROK_LOCAL_SYSTEMONE_MODEL_SELECTION` (`auto|pinned`) — env wins over the
 config file, same precedence as the kill-switches above.
 
-Jeff-1 second decision head: the shim now consults **Jeff-1**
-([GestaltLabs/Jeff-1](https://huggingface.co/GestaltLabs/Jeff-1) — Apache 2.0,
-LoRA on [Qwen3-4B-Instruct-2507](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507))
-for plan ranking and second opinions on uncertain routes. `ranked_tools`
-from the shim drives MCP/server suggestions (shim-ranked provenance);
-`ranked_models` is advisory-only. Certain routes never touch Jeff-1, and a
-down or slow sidecar fails open to GLiClass-only with zero behavior change.
+### Decision engine (SystemOne)
+
+The decision engine behind the routing is **SystemOne**: a **Jev-style**
+typed-decision layer over local GLiClass checkpoints — the "tiny decides,
+big works" split. A small classifier answers in ~100 ms with *scored*
+decisions: per-tier probabilities, top-1/top-2 margins, and an uncertainty
+flag. The scores are calibrated (temperature/Platt fitting), then drive
+tier, effort, expected-utility model ranking, tool/MCP relevance ranking,
+and `rank-plans` plan ranking. Advisory-only, fail-open: a down or slow
+shim changes nothing about the session. The engine lives in the Python
+shim (`python -m systemone.shim`, `http://127.0.0.1:8765`) that this binary
+auto-starts.
+
+**Jeff-1 second decision head.** The shim's second head is
+**[Jeff-1](https://huggingface.co/GestaltLabs/Jeff-1)** (GestaltLabs,
+Apache 2.0) — an open-weight model (LoRA on
+[Qwen3-4B-Instruct-2507](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507))
+trained for Jev-compatible typed decisions (`choice`, `score`, `noul`);
+published model-card metrics: accuracy 0.8183, macro-F1 0.7789, Brier
+0.2839, ECE 0.0807. `rank-plans` blends Jeff-1's P(plan succeeds | task)
+50/50 with the GLiClass score, and *uncertain* routes record an advisory
+`jeff1_second_opinion` — the routed tier is never changed by it. Certain
+routes never touch Jeff-1 (trivial tasks stay on the fast path). It runs
+as a sidecar process (`:8079`), on by default (`SYSTEMONE_JEFF1=0` runs
+GLiClass-only), and fails open to GLiClass-only when down or slow. It
+never loads, unloads, switches, or competes with your loaded model — it
+lives on the Mac mini, never on the inference host.
+
+`ranked_tools` from the shim drives MCP/server suggestions (shim-ranked
+provenance); `ranked_models` is advisory-only.
 
 ## Repository layout
 
