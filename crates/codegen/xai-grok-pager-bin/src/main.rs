@@ -77,6 +77,7 @@ fn process_identity(command: Option<&Command>, is_interactive: bool) -> Option<P
             | Command::Completions { .. }
             | Command::Worktree(_)
             | Command::DiskUsage(_)
+            | Command::Decide(_)
             | Command::Onboard(_)
             | Command::Workspace(_),
         ) => (Entrypoint::Cli, Interactivity::Unattended),
@@ -117,6 +118,7 @@ fn command_needs_pre_sandbox_policy_heal(command: Option<&Command>) -> bool {
             | Command::Version { .. }
             | Command::Completions { .. }
             | Command::DiskUsage(_)
+            | Command::Decide(_)
             | Command::Onboard(_)
             | Command::Workspace(_),
         ) => false,
@@ -2294,6 +2296,11 @@ async fn async_main(mut args: PagerArgs) -> Result<()> {
                 init_tracing_simple("cli");
                 let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
                 return run_workspace_mgmt(workspace_args).await;
+            }
+            Command::Decide(decide_args) => {
+                init_tracing_simple("cli");
+                let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
+                return xai_grok_pager::decide_cmd::run(decide_args).await;
             }
             Command::Sessions(sessions_args) => {
                 init_tracing_simple("cli");

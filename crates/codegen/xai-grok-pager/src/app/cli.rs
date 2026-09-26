@@ -177,6 +177,8 @@ See ~/.grok/README.md for more information.
     /// The dashboard shows every session, top-level and subagents.
     /// Disabled when `[dashboard].enabled = false` in `~/.grok/config.toml` or when the `GROK_AGENT_DASHBOARD=0` env var is set.
     Dashboard,
+    /// Ask the SystemOne decision engine a typed question (choice/noul/score) via the local shim
+    Decide(crate::decide_cmd::DecideArgs),
 }
 /// Arguments for the `wrap` subcommand: the command to run, then its args.
 #[derive(Debug, clap::Args, Clone)]

@@ -62,12 +62,14 @@
 //! a code path that does it.
 
 pub mod config;
+pub mod decide;
 pub mod route;
 pub mod shim;
 pub mod state;
 pub mod suggest;
 
 pub use config::SystemOneConfig;
+pub use decide::{DecideDecision, DecideError, DecideType, decide};
 pub use route::{
     Effort, ModelSelection, PlanInput, PlanRanking, RankedModel, RankedTool, RouteDecision,
     RouteSource, ThinkingMode, Tier, rank_plans, route_for_task,
