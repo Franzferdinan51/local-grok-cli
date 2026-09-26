@@ -41,15 +41,12 @@ pub const ENV_MODEL_SELECTION: &str = "GROK_LOCAL_SYSTEMONE_MODEL_SELECTION";
 /// GLiClass-only. `1`/`true`/`on`/`yes` (or unset) keeps it on.
 pub const ENV_JEFF1: &str = "SYSTEMONE_JEFF1";
 
-/// Default router endpoints: the local shim, then the Jeff-1 fallback
-/// (`:8079`) when the second decision head is enabled.
-/// Mirrors the adapter's `systemone_urls`.
-fn default_urls(jeff1_enabled: bool) -> Vec<String> {
-    let mut urls = vec!["http://127.0.0.1:8765/v1/systemone/route".to_string()];
-    if jeff1_enabled {
-        urls.push("http://127.0.0.1:8079/v1/systemone/route".to_string());
-    }
-    urls
+/// Default router endpoint: the local SystemOne shim. The `:8079` decision
+/// sidecar answers typed decisions (`/v1/systemone/decide`), not route calls,
+/// so it is never a route fallback — `jeff1_enabled` is kept for API
+/// compatibility and ignored here.
+fn default_urls(_jeff1_enabled: bool) -> Vec<String> {
+    vec!["http://127.0.0.1:8765/v1/systemone/route".to_string()]
 }
 
 #[derive(Debug, Clone)]
@@ -363,8 +360,8 @@ mod tests {
     fn defaults_mirror_adapter() {
         let cfg = SystemOneConfig::default();
         assert!(cfg.enabled);
-        assert_eq!(cfg.urls.len(), 2);
-        assert!(cfg.urls[0].contains(":8765"));
+        assert_eq!(cfg.urls.len(), 1);
+        assert!(cfg.urls[0].ends_with("/v1/systemone/route"));
         assert_eq!(cfg.timeout, Duration::from_secs(3));
         assert_eq!(cfg.default_effort, Effort::High);
         assert!(cfg.auto_start_shim);
@@ -373,9 +370,9 @@ mod tests {
         // v0.5.1 defaults: router-driven thinking, pinned model.
         assert_eq!(cfg.thinking, ThinkingMode::Auto);
         assert_eq!(cfg.model_selection, ModelSelection::Pinned);
-        // Jeff-1 second head on by default: both endpoints present.
+        // Jeff-1 second head on by default; the :8079 sidecar is never a
+        // route fallback (it serves typed decisions, not /v1/systemone/route).
         assert!(cfg.jeff1_enabled);
-        assert!(cfg.urls[1].contains(":8079"));
     }
 
     #[test]
@@ -482,7 +479,7 @@ mod tests {
         assert_eq!(cfg.timeout, Duration::from_secs(3));
         assert_eq!(cfg.shim_port, 8765);
         assert_eq!(cfg.default_effort, Effort::High);
-        assert_eq!(cfg.urls.len(), 2);
+        assert_eq!(cfg.urls.len(), 1);
         assert_eq!(cfg.thinking, ThinkingMode::Auto);
         assert_eq!(cfg.model_selection, ModelSelection::Pinned);
     }

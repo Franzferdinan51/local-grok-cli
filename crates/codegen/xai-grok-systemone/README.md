@@ -16,7 +16,7 @@ fallback.
    output to `~/.grok-local/systemone-shim.log`). The GLiClass model is
    already in the HuggingFace cache, so cold start is seconds.
 2. **Route call** — POST the task (first 500 chars) to
-   `/v1/systemone/route` (3s timeout, `:8765` then `:8079` fallback).
+   `/v1/systemone/route` on the local shim (3s timeout).
 3. **Apply** — the tier maps to a reasoning effort and loop caps
    (`edge`/`economy` → low/4 turns, `balanced` → medium/6, `heavy` → high/10),
    applied only when the user did not pass `--reasoning-effort`/`--max-turns`
@@ -90,7 +90,7 @@ proceed with zero user-visible breakage. This is tested, not just documented.
 ```toml
 [systemone]
 enabled = true
-urls = ["http://127.0.0.1:8765/v1/systemone/route", "http://127.0.0.1:8079/v1/systemone/route"]
+urls = ["http://127.0.0.1:8765/v1/systemone/route"]
 timeout_secs = 3
 default_effort = "high"   # fail-open effort when the router is unreachable
 auto_start_shim = true

@@ -51,8 +51,7 @@ Install: `cp grok_local_acp_adapter.py /Users/duckets/.local/bin/grok-local-mcp-
 ```toml
 [speed]
 enabled = true
-systemone_urls = ["http://127.0.0.1:8765/v1/systemone/route",
-                  "http://127.0.0.1:8079/v1/systemone/route"]
+systemone_urls = ["http://127.0.0.1:8765/v1/systemone/route"]
 systemone_timeout = 3
 default_effort = "high"        # fail-open effort (matches grok-local default)
 permission_mode_default = "auto"
