@@ -19,8 +19,13 @@ struct Cache {
     model_selection: ModelSelection,
     last_thinking_applied: Option<String>,
     last_model_advisory: Option<String>,
-    /// Shim's best-value model ranking (top-first, advisory only).
+    /// The model actually selected for inference on the last routed turn
+    /// (the best-value pick under `Auto`, else the session's current model).
+    last_model_selected: Option<String>,
+    /// Shim's best-value model ranking (top-first).
     last_model_ranking: Vec<String>,
+    /// Decider-backed second opinion (tier, agreed?) on the last routed turn.
+    last_second_opinion: Option<(String, bool)>,
 }
 
 static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
@@ -39,10 +44,16 @@ fn refresh_locked(guard: &mut Cache) {
         .as_ref()
         .map(|r| r.thinking_applied.as_str().to_string());
     guard.last_model_advisory = last.as_ref().and_then(|r| r.model_advisory.clone());
+    guard.last_model_selected = last.as_ref().and_then(|r| r.model_selected.clone());
     guard.last_model_ranking = last
         .as_ref()
         .map(|r| r.model_ranking.clone())
         .unwrap_or_default();
+    guard.last_second_opinion = last.as_ref().and_then(|r| {
+        r.second_opinion
+            .as_ref()
+            .map(|op| (op.tier.clone(), op.agree))
+    });
     guard.refreshed_at = Some(Instant::now());
 }
 
@@ -52,9 +63,11 @@ fn refresh_locked(guard: &mut Cache) {
 ///   the last routed turn, `think:auto` before the first route, `think:ultra`
 ///   when pinned.
 /// - Model shows only when automatic: `model:auto→ornith-1.5-9b` with the
-///   router's best-value advisory — the top of the shim's ranked-models list
-///   when present, else the route's `model_id`. Pinned (the default) adds no
-///   noise. Advisory only: the label never switches the session's model.
+///   model actually selected for inference — the best-value pick when it
+///   resolved against the catalog, else the top of the shim's ranked-models
+///   list, else the route's `model_id`. Pinned (the default) adds no noise.
+/// - A decider-backed second opinion that *disagreed* with the route shows
+///   as `2nd-opinion:disagree→balanced`; agreement stays quiet.
 /// - Empty string when SystemOne routing is disabled.
 pub fn systemone_status_suffixes() -> String {
     let mut guard = cache().lock().unwrap_or_else(|e| e.into_inner());
@@ -67,7 +80,7 @@ pub fn systemone_status_suffixes() -> String {
     if !guard.active {
         return String::new();
     }
-    let mut parts = Vec::with_capacity(2);
+    let mut parts = Vec::with_capacity(3);
     let think = match guard.thinking {
         ThinkingMode::Auto => match &guard.last_thinking_applied {
             Some(applied) => format!("auto→{applied}"),
@@ -77,16 +90,21 @@ pub fn systemone_status_suffixes() -> String {
     };
     parts.push(format!("think:{think}"));
     if guard.model_selection == ModelSelection::Auto {
-        // Best-value advisory first (Phase 3 ranked models), then the route's
-        // model_id. Display only — never changes the session's model.
-        let model = match guard.last_model_ranking.first() {
-            Some(top) => format!("auto→{top}"),
-            None => match &guard.last_model_advisory {
-                Some(advisory) => format!("auto→{advisory}"),
-                None => "auto".to_string(),
+        // What inference actually ran with first, then fallbacks.
+        let model = match &guard.last_model_selected {
+            Some(selected) => format!("auto→{selected}"),
+            None => match guard.last_model_ranking.first() {
+                Some(top) => format!("auto→{top}"),
+                None => match &guard.last_model_advisory {
+                    Some(advisory) => format!("auto→{advisory}"),
+                    None => "auto".to_string(),
+                },
             },
         };
         parts.push(format!("model:{model}"));
+    }
+    if let Some((tier, false)) = &guard.last_second_opinion {
+        parts.push(format!("2nd-opinion:disagree→{tier}"));
     }
     format!(" · {}", parts.join(" · "))
 }

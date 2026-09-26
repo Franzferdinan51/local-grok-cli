@@ -47,6 +47,10 @@ pub(crate) struct SystemOneTurnState {
     pub last_thinking_applied: Option<Effort>,
     /// Router's model pick on the last routed turn (advisory only).
     pub last_model_advisory: Option<String>,
+    /// Model actually selected for inference on the last routed turn: the
+    /// best-value pick when model selection is `Auto` (and it resolved
+    /// against the model catalog), else the session's current model.
+    pub last_model_selected: Option<String>,
 }
 
 impl SystemOneTurnState {
@@ -128,10 +132,26 @@ impl super::SessionActor {
         )
         .await;
         // Record what this turn ran with for the TUI (file-based, fail-open).
-        LastRoute::capture(&decision, thinking_mode, thinking_applied, model_selection).store();
+        let model_selected = self.systemone_turn.lock().last_model_selected.clone();
+        LastRoute::capture(
+            &decision,
+            thinking_mode,
+            thinking_applied,
+            model_selection,
+            model_selected,
+        )
+        .store();
     }
 
-    /// Apply a routing decision to this turn. Never switches models.
+    /// Apply a routing decision to this turn.
+    ///
+    /// Model handling: when [`ModelSelection::Auto`] is active, the router's
+    /// best-value pick (top of the shim's expected-utility ranking) becomes
+    /// the session model — but only when it resolves against the model
+    /// catalog. Explicit user configuration (`Pinned`, a named model) always
+    /// wins; unknown ids keep the current model (fail-open). This never
+    /// loads or unloads anything: it names the model the inference layer
+    /// routes to, exactly like a user-typed model id.
     async fn apply_systemone_decision(
         self: &Arc<Self>,
         decision: &xai_grok_systemone::RouteDecision,
@@ -169,12 +189,66 @@ impl super::SessionActor {
             }
         }
 
-        // --- Model advisory: recorded for display, never acted on. ---
-        // `model_selection` intentionally has no effect here: there is no
-        // code path that switches models. Auto vs Pinned only changes what
-        // the UI shows (and what headless `--model auto` does).
+        // --- Model selection. `Auto` lets the router's best-value pick (top
+        // of the shim's expected-utility ranking) become the session model —
+        // but only when it resolves against the model catalog. Explicit user
+        // configuration (`Pinned`, a named model) always wins, unknown ids
+        // keep the current model (fail-open), and nothing here ever loads or
+        // unloads a model: it names the model the inference layer routes to,
+        // exactly like a user-typed model id.
+        let mut model_selected: Option<String> = None;
+        if model_selection == ModelSelection::Auto
+            && let Some(pick) = decision.auto_model_pick(model_selection)
+        {
+            match self.models_manager.resolve_model_catalog_key(pick) {
+                Some(catalog_key) => {
+                    if let Some(mut sampling) =
+                        self.chat_state_handle.get_sampling_config().await
+                    {
+                        // Compare canonical catalog keys so a pick spelled as
+                        // a slug doesn't churn when it's the current model.
+                        let current_key =
+                            self.models_manager.resolve_model_catalog_key(&sampling.model);
+                        if current_key.as_deref() != Some(catalog_key.as_str()) {
+                            sampling.model = catalog_key.clone();
+                            self.chat_state_handle.update_sampling_config(sampling);
+                            // Sync the per-model session fields the full
+                            // `/model` switch path also updates (backend
+                            // search, compaction policy) from the catalog
+                            // entry — without its heavy machinery (prompt
+                            // relabel, family-switch compaction), which an
+                            // automated per-turn router must not churn.
+                            // Endpoint/auth are local-only and identical
+                            // across ranked picks, so they stay untouched.
+                            self.supports_backend_search.set(
+                                self.models_manager
+                                    .model_supports_backend_search(&catalog_key),
+                            );
+                            self.compactions_remaining.set(
+                                self.models_manager
+                                    .model_compactions_remaining(&catalog_key),
+                            );
+                            self.compaction_at_tokens.set(
+                                self.models_manager
+                                    .model_compaction_at_tokens(&catalog_key),
+                            );
+                            tracing::info!(
+                                "systemone: model selection auto → {}",
+                                catalog_key
+                            );
+                        }
+                        model_selected = Some(catalog_key);
+                    }
+                }
+                None => {
+                    tracing::debug!(
+                        "systemone: auto pick '{pick}' not in model catalog; keeping current model"
+                    );
+                }
+            }
+        }
         self.systemone_turn.lock().last_model_advisory = decision.model_id.clone();
-        let _ = model_selection;
+        self.systemone_turn.lock().last_model_selected = model_selected;
 
         // --- Turn budget: the user's explicit max_turns always wins. ---
         if self.max_turns.is_none() {
@@ -204,10 +278,14 @@ impl super::SessionActor {
                 "thinking_applied": thinking_applied.as_str(),
                 "model_selection": model_selection.as_str(),
                 "model_advisory": decision.model_id,
+                "model_selected": self.systemone_turn.lock().last_model_selected.clone(),
                 "max_turns": decision.max_turns,
                 "agentflow_max_turns": agentflow_outcome.max_turns_cap,
                 "source": decision.source.as_str(),
                 "confidence": decision.confidence.unwrap_or(0.0),
+                "second_opinion": decision.second_opinion.as_ref().map(|op| {
+                    serde_json::json!({"tier": op.tier, "agree": op.agree, "confidence": op.confidence})
+                }),
             })),
         );
     }

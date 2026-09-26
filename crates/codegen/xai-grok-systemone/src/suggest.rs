@@ -293,6 +293,7 @@ mod tests {
             tool_scoring: None,
             ranked_tools: Vec::new(),
             ranked_models: Vec::new(),
+            second_opinion: None,
             calibrated_probabilities: Vec::new(),
             prune_note: None,
         }

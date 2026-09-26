@@ -630,6 +630,17 @@ impl ModelsManager {
         resolve_catalog_key(models, &acp::ModelId::new(model_id)).is_some()
     }
 
+    /// Resolve `model_id` (a config key or a routing slug, e.g. a SystemOne
+    /// ranked-model pick) to its canonical catalog key. `None` when the
+    /// catalog knows no such model — the caller keeps the current model
+    /// (fail-open).
+    pub(crate) fn resolve_model_catalog_key(&self, model_id: &str) -> Option<String> {
+        let cat = self.inner.catalog.read();
+        let models = &cat.models;
+        resolve_catalog_key(models, &acp::ModelId::new(model_id))
+            .map(|key| key.0.as_ref().to_string())
+    }
+
     #[cfg(test)]
     fn prefetched(&self) -> Option<IndexMap<String, ModelEntry>> {
         self.inner.catalog.read().prefetched.clone()

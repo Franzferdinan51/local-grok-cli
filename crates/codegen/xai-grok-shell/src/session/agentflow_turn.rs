@@ -441,3 +441,82 @@ impl AgentFlowTurnState {
         Some(build_anchored_summary_prompt(&anchors))
     }
 }
+
+/// Select the best plan from multiple candidate plans via SystemOne's plan
+/// ranking (`POST /v1/systemone/rank-plans`).
+///
+/// Returns `(winner_index, rankings)`. The winner is the input plan whose
+/// ranking carries the highest score; fail-open: on any error (or no scores)
+/// the winner is index 0 and every ranking has `score: None` (input order
+/// preserved — the original first plan runs).
+///
+/// Single-plan flows should skip this entirely — ranking one plan is a
+/// no-op by construction. The native agent-flow generates one plan per
+/// turn, so there is no honest native caller today; the production consumer
+/// is the ACP adapter's `grok_local_plan_then_execute` (`candidate_plans`).
+pub(crate) async fn select_best_plan(
+    task: &str,
+    plans: &[xai_grok_systemone::PlanInput],
+    cfg: &xai_grok_systemone::SystemOneConfig,
+) -> (usize, Vec<xai_grok_systemone::PlanRanking>) {
+    let rankings = xai_grok_systemone::rank_plans(task, plans, cfg).await;
+    let winner = rankings
+        .iter()
+        .filter_map(|r| {
+            let score = r.score?;
+            let idx = plans.iter().position(|p| p.id == r.id)?;
+            Some((idx, score))
+        })
+        .max_by(|a, b| {
+            a.1.partial_cmp(&b.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(idx, _)| idx)
+        .unwrap_or(0);
+    (winner, rankings)
+}
+
+#[cfg(test)]
+mod select_best_plan_tests {
+    use super::select_best_plan;
+    use xai_grok_systemone::{PlanInput, SystemOneConfig};
+
+    fn disabled_cfg() -> SystemOneConfig {
+        SystemOneConfig {
+            urls: Vec::new(),
+            ..SystemOneConfig::default()
+        }
+    }
+
+    fn two_plans() -> Vec<PlanInput> {
+        vec![
+            PlanInput {
+                id: "a".to_string(),
+                text: "first plan".to_string(),
+            },
+            PlanInput {
+                id: "b".to_string(),
+                text: "second plan".to_string(),
+            },
+        ]
+    }
+
+    #[tokio::test]
+    async fn fail_open_preserves_input_order() {
+        // Routing disabled: no ranking, original-first wins.
+        let plans = two_plans();
+        let (winner, rankings) = select_best_plan("do a thing", &plans, &disabled_cfg()).await;
+        assert_eq!(winner, 0);
+        assert_eq!(rankings.len(), 2);
+        assert!(rankings.iter().all(|r| r.score.is_none()));
+        assert_eq!(rankings[0].id, "a");
+        assert_eq!(rankings[1].id, "b");
+    }
+
+    #[tokio::test]
+    async fn empty_plans_yield_empty_ranking() {
+        let (winner, rankings) = select_best_plan("do a thing", &[], &disabled_cfg()).await;
+        assert_eq!(winner, 0);
+        assert!(rankings.is_empty());
+    }
+}

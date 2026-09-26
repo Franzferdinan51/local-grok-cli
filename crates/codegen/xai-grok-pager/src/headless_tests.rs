@@ -813,7 +813,10 @@ fn handler_answers_ext_method_instead_of_dropping() {
 #[test]
 fn headless_model_auto_never_becomes_a_switch_target() {
     use super::headless_model_switch_target;
-    // `--model auto` is advisory only: no override, no switch, no unload.
+    // `--model auto` is not a literal switch target: the flag mapper returns
+    // None, and the router's best-value pick becomes `default_model_override`
+    // through the dedicated auto branch in the run path instead. A named
+    // model keeps the pre-existing switch-target behavior and always wins.
     assert_eq!(headless_model_switch_target(None), None);
     assert_eq!(headless_model_switch_target(Some("auto")), None);
     assert_eq!(headless_model_switch_target(Some("Auto")), None);

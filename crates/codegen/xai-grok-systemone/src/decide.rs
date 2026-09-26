@@ -2,10 +2,11 @@
 //!
 //! The SystemOne router grew a decision engine (newer shims, Phase 3+): typed
 //! choice/noul/score questions answered with calibrated probabilities. The
-//! shim proxies to the Jeff-1 sidecar when it is up (`backend: "jeff1"`) and
-//! falls back to the local GLiClass engine otherwise (`backend: "fallback"`).
-//! The confidence/temperature machinery behind the endpoint is adapted from
-//! Mapika/decider (Apache-2.0); the shim's own implementation is original.
+//! shim answers them with its decider backend (Mapika/decider-4b v2.1,
+//! `backend: "decider"`) and falls back to the local GLiClass engine
+//! otherwise (`backend: "fallback"`). Historical shims may still report
+//! `backend: "jeff1"` — that value parses and passes through unchanged, but
+//! it is never presented as the backend name in user-facing text.
 //!
 //! Request schema: `{state, instructions, criteria, type}` —
 //! `type` is one of `choice | noul | score`; `criteria` is `{label:
@@ -85,7 +86,9 @@ pub struct DecideDecision {
     pub confidence: f64,
     /// Server-side latency in milliseconds, when reported.
     pub latency_ms: Option<f64>,
-    /// Which backend answered: `"jeff1"` or `"fallback"` (GLiClass).
+    /// Which backend answered: `"decider"` (current), `"fallback"` (GLiClass),
+    /// or whatever the shim sent — historical `"jeff1"` values parse and
+    /// pass through for compatibility with older shims.
     pub backend: Option<String>,
 }
 
@@ -204,7 +207,13 @@ pub async fn decide(
                 if status.is_success() {
                     match resp.json::<serde_json::Value>().await {
                         Ok(payload) => match parse_decide(&payload, qtype) {
-                            Some(decision) => return Ok(decision),
+                            Some(decision) => {
+                                // Append-only decision record for calibration
+                                // feedback (fail-open: logging never breaks
+                                // the decide call).
+                                crate::records::record_decide_decision(&decision);
+                                return Ok(decision);
+                            }
                             None => {
                                 last_detail = format!(
                                     "{d_url} answered 200 but the payload was not a decide response"
@@ -375,12 +384,28 @@ mod tests {
             "distribution": {"0": 0.1, "1": 0.3, "2": 0.6},
             "confidence": 0.6,
             "latency_ms": 41.0,
-            "backend": "jeff1",
+            "backend": "decider",
         });
         let d = parse_decide(&payload, DecideType::Score).expect("parses");
         assert_eq!(d.decision_type, DecideType::Score);
         assert_eq!(d.winner, "2");
         assert_eq!(d.distribution.first().map(|(k, _)| k.as_str()), Some("2"));
+        assert_eq!(d.backend.as_deref(), Some("decider"));
+    }
+
+    #[test]
+    fn parse_passes_through_historical_jeff1_backend() {
+        // Older shims reported `backend: "jeff1"`; the value must still parse
+        // and pass through (wire compatibility), even though user-facing
+        // text never presents it as the backend name.
+        let payload = serde_json::json!({
+            "type": "noul",
+            "label": "yes",
+            "probabilities": {"yes": 0.6, "no": 0.4},
+            "confidence": 0.6,
+            "backend": "jeff1",
+        });
+        let d = parse_decide(&payload, DecideType::Noul).expect("parses");
         assert_eq!(d.backend.as_deref(), Some("jeff1"));
     }
 

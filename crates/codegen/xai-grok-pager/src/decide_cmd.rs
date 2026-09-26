@@ -1,9 +1,11 @@
 //! `grok-local decide`: ask the SystemOne decision engine a typed question.
 //!
 //! Backed by `POST /v1/systemone/decide` on the local SystemOne shim (the
-//! shim proxies to the Jeff-1 sidecar when it is up, else answers with the
-//! local GLiClass engine; confidence/temperature conventions are adapted from
-//! Mapika/decider, Apache-2.0 — see `xai-grok-systemone/src/decide.rs`).
+//! shim answers with its decider backend — Mapika/decider-4b v2.1,
+//! `backend: "decider"` — and falls back to the local GLiClass engine,
+//! `backend: "fallback"`; historical shims may report `"jeff1"`, which is
+//! parsed but never presented as the backend name — see
+//! `xai-grok-systemone/src/decide.rs`).
 //! Reuses the existing SystemOne shim URL config (`urls` from
 //! `~/.grok-local/config.toml` `[systemone]` or `GROK_LOCAL_SYSTEMONE_URLS`);
 //! no new endpoint defaults are introduced here.
@@ -143,7 +145,10 @@ pub async fn run(args: DecideArgs) -> Result<()> {
 fn print_human(d: &DecideDecision, out: &mut impl Write) -> std::io::Result<()> {
     let mut meta = format!("type: {}", d.decision_type);
     if let Some(backend) = &d.backend {
-        meta.push_str(&format!(", backend: {backend}"));
+        // Historical shims reported "jeff1"; user-facing text presents it
+        // under the current backend name ("decider").
+        let display = if backend == "jeff1" { "decider" } else { backend };
+        meta.push_str(&format!(", backend: {display}"));
     }
     if let Some(ms) = d.latency_ms {
         meta.push_str(&format!(", {ms:.1} ms"));

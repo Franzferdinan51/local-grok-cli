@@ -16,7 +16,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::route::{Effort, ModelSelection, RouteDecision, ThinkingMode};
+use crate::route::{Effort, ModelSelection, RouteDecision, SecondOpinion, ThinkingMode};
 
 fn state_path() -> PathBuf {
     xai_dirs::grok_home().join("systemone-last-route.json")
@@ -36,12 +36,20 @@ pub struct LastRoute {
     pub thinking_mode: String,
     /// The user's model-selection setting.
     pub model_selection: String,
-    /// Router's model pick (advisory only — the session never switches).
+    /// Router's model pick (the best-value pick from `ranked_models`).
     pub model_advisory: Option<String>,
+    /// The model actually selected for inference after this route: the
+    /// best-value pick when model selection is `Auto` (and it resolved
+    /// against the model catalog), else the session's current model.
+    #[serde(default)]
+    pub model_selected: Option<String>,
+    /// The decider-backed second opinion, when the shim sent one (parsed
+    /// from the historical `jeff1_second_opinion` wire key; advisory only).
+    #[serde(default)]
+    pub second_opinion: Option<SecondOpinion>,
     pub confidence: Option<f64>,
     pub source: String,
     /// Shim's best-value model ranking (top ids, expected-utility order).
-    /// Advisory only — the session never switches models.
     #[serde(default)]
     pub model_ranking: Vec<String>,
     /// Whether the route was uncertain.
@@ -54,11 +62,14 @@ pub struct LastRoute {
 
 impl LastRoute {
     /// Build from a decision plus the resolved settings for the turn.
+    /// `model_selected` is the model actually selected for inference after
+    /// this route (the best-value pick under `Auto`, else the current one).
     pub fn capture(
         decision: &RouteDecision,
         thinking_mode: ThinkingMode,
         thinking_applied: Effort,
         model_selection: ModelSelection,
+        model_selected: Option<String>,
     ) -> Self {
         Self {
             ts: std::time::SystemTime::now()
@@ -71,6 +82,8 @@ impl LastRoute {
             thinking_mode: thinking_mode.as_str().to_string(),
             model_selection: model_selection.as_str().to_string(),
             model_advisory: decision.model_id.clone(),
+            model_selected,
+            second_opinion: decision.second_opinion.clone(),
             confidence: decision.confidence,
             source: decision.source.as_str().to_string(),
             model_ranking: decision
@@ -108,14 +121,20 @@ mod tests {
     fn capture_round_trips() {
         let mut d = RouteDecision::fail_open(&SystemOneConfig::default(), None);
         d.model_id = Some("ornith-1.5-9b".to_string());
-        let lr = LastRoute::capture(&d, ThinkingMode::Auto, Effort::High, ModelSelection::Auto);
+        let lr = LastRoute::capture(&d, ThinkingMode::Auto, Effort::High, ModelSelection::Auto, Some("ornith-1.5-9b".to_string()));
         assert_eq!(lr.thinking_mode, "auto");
         assert_eq!(lr.thinking_applied, "high");
         assert_eq!(lr.model_selection, "auto");
         assert_eq!(lr.model_advisory.as_deref(), Some("ornith-1.5-9b"));
+        assert_eq!(lr.model_selected.as_deref(), Some("ornith-1.5-9b"));
+        assert!(lr.second_opinion.is_none());
         let text = serde_json::to_string(&lr).unwrap();
         let back: LastRoute = serde_json::from_str(&text).unwrap();
         assert_eq!(back.thinking_applied, "high");
+        // Older state files (without the new fields) still deserialize.
+        let old: LastRoute = serde_json::from_str(r#"{"ts":1,"tier":"balanced","routed_effort":"medium","thinking_applied":"medium","thinking_mode":"auto","model_selection":"pinned","model_advisory":null,"confidence":null,"source":"fail-open"}"#).unwrap();
+        assert!(old.model_selected.is_none());
+        assert!(old.second_opinion.is_none());
     }
 
     /// Phase 3: the ranked-models advisory and the uncertain/prune signals
@@ -141,7 +160,7 @@ mod tests {
         ];
         d.uncertain = Some(true);
         d.prune_note = Some("disabled(uncertain)".to_string());
-        let lr = LastRoute::capture(&d, ThinkingMode::Auto, Effort::Medium, ModelSelection::Auto);
+        let lr = LastRoute::capture(&d, ThinkingMode::Auto, Effort::Medium, ModelSelection::Auto, None);
         assert_eq!(lr.model_ranking, vec!["cheap-model", "big-model"]);
         assert!(lr.uncertain);
         assert_eq!(lr.prune_note.as_deref(), Some("disabled(uncertain)"));

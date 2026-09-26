@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Unit tests for the grok-local ACP adapter's SystemOne routing legs
-(effort caps, opt-in model switching, MCP server suggestions).
+(effort caps, no-hard-coded-model-ids policy, plan ranking, second
+opinions, decision records, MCP server suggestions).
 
 Stdlib only (unittest + unittest.mock). Run from the adapter dir:
     python3 -m unittest discover -s tests -v
@@ -9,6 +10,7 @@ import copy
 import importlib.util
 import json
 import pathlib
+import shutil
 import sys
 import tempfile
 import unittest
@@ -54,7 +56,9 @@ def base_decision(**kw):
          "ralph_cap": 8, "permission_mode": "auto", "tier": "balanced",
          "local_model": "ornith-1.5-9b", "loaded_model": "ornith-1.5-9b",
          "task_labels": [], "suggested_mcp_servers": [],
-         "suggestion_detail": [], "suggestion_note": mod._SUGGESTION_NOTE}
+         "suggestion_detail": [], "suggestion_note": mod._SUGGESTION_NOTE,
+         "calibrated_probabilities": {}, "margin": None, "uncertain": None,
+         "ranked_models": [], "second_opinion": None}
     d.update(kw)
     return d
 
@@ -65,10 +69,20 @@ class SpeedStackTest(unittest.TestCase):
         mod._systemone_cache.clear()
         self.cfg = mod.speed_config()
         self._patches = []
-        # Hermetic by default: no network, no LM Studio, no real inventory.
-        self.patch("lmstudio_loaded_model", lambda: "ornith-1.5-35b-a3b")
-        self.patch("_pick_local_model", lambda tier, mid: "ornith-1.5-9b")
+        # Hermetic by default: no network, no LM Studio, no real inventory,
+        # and decision records go to a per-test temp file (never the real
+        # ~/.grok-local/systemone/decision_records.jsonl).
+        self.patch("lmstudio_loaded_model", lambda: "test-model-9b")
+        self.patch("_pick_local_model", lambda tier, mid: "test-model-9b")
         self.inv_patch = self.patch("_mcp_server_inventory", lambda: [])
+        self._records_tmp = tempfile.mkdtemp(prefix="adapter-records-")
+        self.patch("_records_path",
+                   lambda: pathlib.Path(self._records_tmp) / "decision_records.jsonl")
+
+    def tearDown(self):
+        for p in self._patches:
+            p.stop()
+        shutil.rmtree(self._records_tmp, ignore_errors=True)
 
     def tearDown(self):
         for p in self._patches:
@@ -158,21 +172,23 @@ class SpeedStackTest(unittest.TestCase):
         self.assertEqual(d["effort"], "high")      # tier-derived fallback
         self.assertEqual(d["max_turns"], 10)
 
-    # --- A2: auto_model_switch -------------------------------------------
-    def test_auto_model_switch_default_off(self):
-        self.assertFalse(self.cfg["auto_model_switch"])
+    # --- A2: no model switching, no hard-coded ids --------------------------
+    def test_model_switch_path_removed(self):
+        # The standing no-unload rule (never unload a model the user loaded)
+        # is enforced structurally: the adapter has no load/unload code path
+        # at all.
+        self.assertFalse(hasattr(mod, "_maybe_switch_model"))
+        self.assertNotIn("auto_model_switch", mod.SPEED_DEFAULTS)
+
+    def test_one_shot_never_touches_lms(self):
         self.patch("systemone_route",
-                   lambda *a, **k: base_decision(loaded_model="ornith-1.5-35b-a3b"))
-        switch = mock.patch.object(mod, "_maybe_switch_model",
-                                   side_effect=AssertionError("must not switch"))
-        switch.start()
-        self._patches.append(switch)
+                   lambda *a, **k: base_decision(loaded_model="test-model-35b"))
         calls = []
 
         def fake_run(cmd, **kw):
             calls.append(cmd)
             if cmd[0] == mod.LMS_BIN:
-                raise AssertionError("lms must not be called when switch is off")
+                raise AssertionError("lms must never be called")
             return Proc(0, "grok output", "")
 
         with mock.patch("subprocess.run", fake_run), tempfile.TemporaryDirectory() as td:
@@ -180,32 +196,11 @@ class SpeedStackTest(unittest.TestCase):
         self.assertEqual(out, "grok output")
         self.assertTrue(all(c[0] != mod.LMS_BIN for c in calls))
 
-    def test_auto_model_switch_enabled_unload_load_verify(self):
-        self.cfg["auto_model_switch"] = True
-        self.patch("systemone_route",
-                   lambda *a, **k: base_decision(local_model="ornith-1.5-9b",
-                                                loaded_model="ornith-1.5-35b-a3b"))
-        self.patch("lmstudio_loaded_model", lambda: "ornith-1.5-9b")  # post-load state
-        calls = []
-
-        def fake_run(cmd, **kw):
-            calls.append(cmd)
-            return Proc(0, "ok", "")
-
-        with mock.patch("subprocess.run", fake_run), tempfile.TemporaryDirectory() as td:
-            out = mod._grok_one_shot("hello", td, effort="auto")
-        self.assertEqual(out, "ok")
-        self.assertEqual(calls[0][:3], [mod.LMS_BIN, "unload", "ornith-1.5-35b-a3b"])
-        self.assertEqual(calls[1][:3], [mod.LMS_BIN, "load", "ornith-1.5-9b"])
-        self.assertNotEqual(calls[2][0], mod.LMS_BIN)  # then the grok spawn
-
-    def test_maybe_switch_noop_when_already_loaded(self):
-        calls = []
-        with mock.patch("subprocess.run",
-                        lambda cmd, **kw: calls.append(cmd) or Proc()):
-            detail = mod._maybe_switch_model(base_decision())
-        self.assertFalse(detail["switched"])
-        self.assertEqual(calls, [])
+    def test_no_hardcoded_model_ids(self):
+        self.assertIsNone(self.cfg["planner_model"])
+        self.assertEqual(self.cfg["tier_models"], {})
+        self.assertEqual(mod.SPEED_DEFAULTS["systemone_urls"],
+                         ["http://127.0.0.1:8765/v1/systemone/route"])
 
     # --- A3: suggestion scorer --------------------------------------------
     FIXTURE = [
@@ -309,7 +304,7 @@ class SpeedStackTest(unittest.TestCase):
 
     # --- protocol surface guard ---------------------------------------------
     def test_tool_surface_unchanged(self):
-        self.assertEqual(len(mod.TOOLS), 24)
+        self.assertEqual(len(mod.TOOLS), 25)   # +grok_local_rank_plans (2026-09-26)
         for t in mod.TOOLS:
             self.assertIn("name", t)
             self.assertIn("description", t)
@@ -319,8 +314,145 @@ class SpeedStackTest(unittest.TestCase):
         self.patch("systemone_route", lambda *a, **k: base_decision())
         res = mod.handle("grok_local_systemone_route", {"task": "x"})
         for field in ("effort", "max_turns", "ralph_cap", "task_labels",
-                      "suggested_mcp_servers", "suggestion_note"):
+                      "suggested_mcp_servers", "suggestion_note",
+                      "calibrated_probabilities", "margin", "uncertain",
+                      "ranked_models", "second_opinion"):
             self.assertIn(field, res)
+
+    # --- A4: second opinion (historical jeff1_second_opinion wire key) --------
+    def test_second_opinion_parsed_from_historical_key(self):
+        with self._shim({"tier": "economy",
+                         "jeff1_second_opinion": {"tier": "balanced",
+                                                 "confidence": 0.6,
+                                                 "agree": False,
+                                                 "rationale": "maybe heavier"}}):
+            d = mod.systemone_route("do a thing")
+        so = d["second_opinion"]
+        self.assertIsNotNone(so)
+        self.assertEqual(so["tier"], "balanced")
+        self.assertEqual(so["confidence"], 0.6)
+        self.assertFalse(so["agree"])
+        # The advisory never changes the primary routed tier, and no
+        # user-facing key mentions Jeff-1.
+        self.assertEqual(d["tier"], "economy")
+        self.assertNotIn("jeff1_second_opinion", d)
+        self.assertTrue(all("jeff1" not in str(k).lower() for k in d.keys()))
+
+    def test_second_opinion_absent_without_key(self):
+        with self._shim({"tier": "economy"}):
+            d = mod.systemone_route("do a thing")
+        self.assertIsNone(d["second_opinion"])
+
+    def test_second_opinion_malformed_ignored(self):
+        with self._shim({"tier": "economy", "jeff1_second_opinion": "nonsense"}):
+            d = mod.systemone_route("do a thing")
+        self.assertIsNone(d["second_opinion"])
+
+    # --- A5: decision records -------------------------------------------------
+    def test_decision_record_appended_on_route(self):
+        with self._shim({"tier": "balanced",
+                         "calibrated_probabilities": {"balanced": 0.55,
+                                                      "economy": 0.25,
+                                                      "heavy": 0.2},
+                         "margin": 0.3, "uncertain": False}):
+            d = mod.systemone_route("route me", kind="prompt")
+        path = mod._records_path()
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["type"], "choice")
+        self.assertEqual(row["probs"], [0.55, 0.25, 0.2])  # sorted desc
+        self.assertEqual(row["tier"], "balanced")
+        self.assertEqual(row["client"], "grok-local-acp-adapter")
+        self.assertNotIn("gold", row)   # no fabricated ground truth
+
+    def test_decision_record_appended_on_fail_open(self):
+        import urllib.error
+        with mock.patch("urllib.request.urlopen",
+                        side_effect=urllib.error.URLError("down")):
+            mod.systemone_route("route me", kind="prompt")
+        rows = [json.loads(line) for line in mod._records_path().read_text().splitlines()]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["source"], "fail-open")
+
+    def test_decision_record_fail_open_unwritable(self):
+        # Logging must never break routing: an unwritable path is swallowed.
+        self.patch("_records_path",
+                   lambda: pathlib.Path("/proc/nowhere/decision_records.jsonl"))
+        with self._shim({"tier": "economy"}):
+            d = mod.systemone_route("route me")
+        self.assertEqual(d["tier"], "economy")
+
+    # --- A6: plan ranking -----------------------------------------------------
+    def test_rank_plans_url_derivation(self):
+        self.assertEqual(
+            mod._rank_plans_url("http://127.0.0.1:8765/v1/systemone/route"),
+            "http://127.0.0.1:8765/v1/systemone/rank-plans")
+        self.assertIsNone(mod._rank_plans_url("http://example.com/other"))
+
+    def test_rank_plans_picks_highest_score(self):
+        plans = [{"id": "a", "text": "plan a"}, {"id": "b", "text": "plan b"}]
+        payload = {"rankings": [{"id": "a", "score": 0.4, "p_success": 0.5},
+                                {"id": "b", "score": 0.8, "p_success": 0.9}]}
+        with mock.patch("urllib.request.urlopen", return_value=FakeResp(payload)):
+            winner, rankings = mod._rank_plans("task", plans)
+        self.assertEqual(winner, 1)
+        self.assertEqual(rankings[1]["score"], 0.8)
+        self.assertEqual(rankings[1]["p_success"], 0.9)
+
+    def test_rank_plans_fail_open_shim_down(self):
+        import urllib.error
+        plans = [{"id": "a", "text": "plan a"}, {"id": "b", "text": "plan b"}]
+        with mock.patch("urllib.request.urlopen",
+                        side_effect=urllib.error.URLError("down")):
+            winner, rankings = mod._rank_plans("task", plans)
+        self.assertEqual(winner, 0)                 # original first wins
+        self.assertTrue(all(r["score"] is None for r in rankings))
+        self.assertEqual([r["id"] for r in rankings], ["a", "b"])  # order kept
+
+    def test_rank_plans_tool_requires_two_plans(self):
+        with self.assertRaises(ValueError):
+            mod.handle("grok_local_rank_plans", {"task": "t",
+                                                 "plans": [{"id": "a", "text": "x"}]})
+
+    def test_rank_plans_tool_fail_open(self):
+        import urllib.error
+        with mock.patch("urllib.request.urlopen",
+                        side_effect=urllib.error.URLError("down")):
+            res = mod.handle("grok_local_rank_plans",
+                             {"task": "t",
+                              "plans": [{"id": "a", "text": "x"},
+                                        {"id": "b", "text": "y"}]})
+        self.assertEqual(res["winner_index"], 0)
+        self.assertTrue(res["fail_open"])
+
+    def test_plan_then_execute_candidate_plans_winner(self):
+        self.patch("_rank_plans",
+                   lambda task, plans: (1, [{"id": p["id"], "score": 1.0 - i}
+                                                 for i, p in enumerate(plans)]))
+        self.patch("systemone_route", lambda *a, **k: base_decision(effort="low"))
+        self.patch("_grok_one_shot", lambda prompt, cwd, **kw: "exec output")
+        with tempfile.TemporaryDirectory() as td:
+            res = mod._plan_then_execute({"task": "t", "cwd": td,
+                                          "plan_path": td + "/plan.md",
+                                          "candidate_plans": ["first plan",
+                                                              "winning plan"]})
+        self.assertEqual(res["plan"], "winning plan")
+        self.assertEqual(res["plan_ranking"]["winner"], "plan-1")
+        self.assertEqual(res["result"], "exec output")
+
+    def test_plan_then_execute_fail_open_uses_first_candidate(self):
+        self.patch("_rank_plans",
+                   lambda task, plans: (0, [{"id": p["id"], "score": None}
+                                            for p in plans]))
+        self.patch("systemone_route", lambda *a, **k: base_decision(effort="low"))
+        self.patch("_grok_one_shot", lambda prompt, cwd, **kw: "exec output")
+        with tempfile.TemporaryDirectory() as td:
+            res = mod._plan_then_execute({"task": "t", "cwd": td,
+                                          "plan_path": td + "/plan.md",
+                                          "candidate_plans": ["first plan",
+                                                              "second plan"]})
+        self.assertEqual(res["plan"], "first plan")
 
 
 if __name__ == "__main__":

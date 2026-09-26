@@ -10,14 +10,15 @@
 //! - Unknown tiers fall back to the high tier's caps (fail-open).
 //! - ANY error/timeout -> fail-open decision from config defaults.
 //!
-//! The `model_id` in the response is advisory only: it is recorded on the
-//! decision and logged, never acted on (no model switching, ever).
+//! The `model_id` in the response is the router's model pick: it is recorded
+//! on the decision and applied as the session model only when the user opted
+//! into [`ModelSelection::Auto`]; otherwise it is advisory (see below).
 //!
 //! # Decision surfaces (Phase 3)
 //!
 //! Newer shims attach a scored decision surface to the route dict:
 //! `calibrated_probabilities` / `margin` / `uncertain`, `ranked_models`
-//! (expected-utility order, advisory), and `ranked_tools` with
+//! (expected-utility order), and `ranked_tools` with
 //! `tool_scoring` (`"full"` | `"skipped"`). Older shims lack these keys —
 //! absence is treated as "not present", never as an error (all `Option` /
 //! defaulted; parsing never panics).
@@ -27,9 +28,16 @@
 //!   us it doesn't know enough to narrow the toolset).
 //! - `tool_scoring == "full"` with non-empty `ranked_tools`: the shim's
 //!   ranked tools drive MCP/server suggestions (see `suggest.rs`).
-//! - `ranked_models` is advisory only — surfaced in diagnostics as
-//!   "SystemOne suggests X as best value; current model unchanged". This
-//!   crate has no code path that switches or unloads a model.
+//! - `ranked_models`: the top entry is the best-value pick. It drives actual
+//!   model selection only when [`ModelSelection::Auto`] is active — the pick
+//!   must resolve against the caller's model catalog, otherwise the current
+//!   model stands (fail-open). Explicit user configuration (a named model)
+//!   always wins. This crate never loads or unloads models; it only names
+//!   the pick, exactly like a user-typed model id.
+//! - `jeff1_second_opinion` (historical wire name): a decider-backed advisory
+//!   second opinion on uncertain routes. Parsed into [`SecondOpinion`] and
+//!   surfaced in diagnostics; never changes the routed tier. Never labeled
+//!   "Jeff-1" in user-facing text.
 //!
 //! [`rank_plans`] calls `POST /v1/systemone/rank-plans` (also advisory,
 //! fail-open: input order with `score: None` on any failure).
@@ -223,8 +231,9 @@ impl Default for ThinkingMode {
 /// The user's model-selection setting. Fully independent from
 /// [`ThinkingMode`]. `Pinned` means "use the session's active model" (the
 /// long-standing default behavior, first-class). `Auto` lets SystemOne pick
-/// per task — recorded as an advisory and shown in the UI; the session never
-/// switches models on its own.
+/// per task — the best-value pick from the shim's `ranked_models` becomes the
+/// session's model (when it resolves against the model catalog; explicit
+/// user configuration always wins).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ModelSelection {
     Auto,
@@ -283,11 +292,12 @@ pub struct RankedTool {
     pub relevance: f64,
 }
 
-/// A model ranked by expected utility (`ranked_models`): top-first, advisory.
+/// A model ranked by expected utility (`ranked_models`): top-first.
 ///
-/// The ranking is informational only — it is surfaced in diagnostics so the
-/// operator can see what SystemOne considers best value. Nothing in this
-/// crate loads, unloads, or switches models.
+/// The top entry is the best-value pick; callers apply it as the session
+/// model only under [`ModelSelection::Auto`] (and only when it resolves
+/// against their model catalog). Nothing in this crate loads, unloads, or
+/// switches models — the crate only names the pick.
 #[derive(Debug, Clone)]
 pub struct RankedModel {
     /// Model id as known to the registry (no ID is hard-coded here; the
@@ -297,6 +307,24 @@ pub struct RankedModel {
     pub utility: Option<f64>,
     pub quality: Option<f64>,
     pub cost: Option<f64>,
+}
+
+/// A decider-backed second opinion on an uncertain route, parsed from the
+/// historical `jeff1_second_opinion` wire key.
+///
+/// Advisory only: it never changes the routed tier. The wire name is
+/// historical (the backend is the decider now) — user-facing text must call
+/// it a "second opinion", never "Jeff-1".
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SecondOpinion {
+    /// The tier the second opinion favors.
+    pub tier: String,
+    /// Its confidence in that tier (0..1 when reported).
+    pub confidence: Option<f64>,
+    /// Whether it agrees with the routed tier.
+    pub agree: bool,
+    /// Why, in the second opinion's own words.
+    pub rationale: String,
 }
 
 /// A candidate plan for [`rank_plans`].
@@ -333,7 +361,9 @@ pub struct RouteDecision {
     pub max_turns: u32,
     pub confidence: Option<f64>,
     pub rationale: Option<String>,
-    /// Advisory only: logged, never used to switch models.
+    /// The router's model pick. Recorded for the evidence line; applied as
+    /// the session model only when the caller drives automatic model
+    /// selection ([`ModelSelection::Auto`]).
     pub model_id: Option<String>,
     pub task_labels: Vec<String>,
     pub suggested_mcp_servers: Vec<String>,
@@ -351,8 +381,13 @@ pub struct RouteDecision {
     pub tool_scoring: Option<String>,
     /// Shim-ranked tools (`{id, kind, relevance}`), relevance desc.
     pub ranked_tools: Vec<RankedTool>,
-    /// Shim-ranked models (expected-utility order). Advisory only.
+    /// Shim-ranked models (expected-utility order). The top entry drives
+    /// automatic model selection under [`ModelSelection::Auto`].
     pub ranked_models: Vec<RankedModel>,
+    /// Decider-backed second opinion on uncertain routes, parsed from the
+    /// historical `jeff1_second_opinion` wire key. `None` on older shims or
+    /// certain routes. Advisory only — never changes the routed tier.
+    pub second_opinion: Option<SecondOpinion>,
     /// Calibrated tier probabilities, probability desc.
     pub calibrated_probabilities: Vec<(String, f64)>,
     /// Diagnostic note about pruning (set by `suggest_and_maybe_prune`),
@@ -381,6 +416,7 @@ impl RouteDecision {
             tool_scoring: None,
             ranked_tools: Vec::new(),
             ranked_models: Vec::new(),
+            second_opinion: None,
             calibrated_probabilities: Vec::new(),
             prune_note: None,
         }
@@ -394,14 +430,28 @@ impl RouteDecision {
         self.tool_scoring.as_deref() == Some("full") && !self.ranked_tools.is_empty()
     }
 
-    /// Advisory only: the shim's best-value model pick (top of
-    /// `ranked_models`), or `None` when the shim sent no ranking.
-    ///
-    /// Recorded for diagnostics ("SystemOne suggests X as best value;
-    /// current model unchanged"). There is no code path in this crate that
-    /// acts on it — model switching is deliberately not implemented.
+    /// The shim's best-value model pick (top of `ranked_models`), or `None`
+    /// when the shim sent no ranking. Callers apply it via
+    /// [`Self::auto_model_pick`]; this raw accessor stays for diagnostics.
     pub fn best_value_model(&self) -> Option<&str> {
         self.ranked_models.first().map(|m| m.model_id.as_str())
+    }
+
+    /// The model id to actually select for this turn, or `None` to keep the
+    /// current behavior.
+    ///
+    /// Returns the best-value pick only when `selection` is
+    /// [`ModelSelection::Auto`] **and** the shim sent a non-empty ranking.
+    /// `Pinned` (or an absent ranking) yields `None`: explicit user
+    /// configuration always wins, and there is nothing to select from.
+    /// The returned id is whatever the shim sent — the caller must resolve
+    /// it against its own model catalog (unknown ids keep the current
+    /// model; fail-open). No id is ever hard-coded here.
+    pub fn auto_model_pick(&self, selection: ModelSelection) -> Option<&str> {
+        if selection != ModelSelection::Auto {
+            return None;
+        }
+        self.best_value_model()
     }
 
     /// One greppable stderr line proving what routing did. This is the
@@ -442,9 +492,16 @@ impl RouteDecision {
         if let Some(model) = &self.model_id {
             parts.push(format!("model_advisory={model}"));
         }
-        // Advisory only: best-value suggestion; the session's model is unchanged.
+        // Best-value pick from the expected-utility ranking; applied as the
+        // session model only under ModelSelection::Auto.
         if let Some(top) = self.best_value_model() {
             parts.push(format!("model_ranking={top}"));
+        }
+        // Decider-backed second opinion (historical `jeff1_second_opinion`
+        // wire name); advisory, never changes the routed tier.
+        if let Some(op) = &self.second_opinion {
+            let verdict = if op.agree { "agree" } else { "disagree" };
+            parts.push(format!("second_opinion={}:{verdict}", op.tier));
         }
         if !self.suggested_mcp_servers.is_empty() {
             parts.push(format!(
@@ -471,7 +528,9 @@ impl RouteDecision {
 /// error itself.
 pub async fn route_for_task(task: &str, kind: &str, cfg: &SystemOneConfig) -> RouteDecision {
     if !cfg.routing_active() {
-        return RouteDecision::fail_open(cfg, Some("routing disabled".to_string()));
+        let decision = RouteDecision::fail_open(cfg, Some("routing disabled".to_string()));
+        crate::records::record_route_decision(&decision, kind);
+        return decision;
     }
     let task_snippet: String = task.chars().take(500).collect();
     let body = serde_json::json!({
@@ -506,6 +565,9 @@ pub async fn route_for_task(task: &str, kind: &str, cfg: &SystemOneConfig) -> Ro
                         decision.error = None;
                         // Route-driven MCP suggestions are computed by the caller
                         // from the task + labels (see suggest.rs); record labels here.
+                        // Append-only decision record for calibration feedback
+                        // (fail-open: logging never breaks the route).
+                        crate::records::record_route_decision(&decision, kind);
                         return decision;
                     }
                     Ok(_) => {
@@ -525,6 +587,7 @@ pub async fn route_for_task(task: &str, kind: &str, cfg: &SystemOneConfig) -> Ro
     decision.error = decision
         .error
         .map(|e| format!("router unreachable ({e}); using defaults"));
+    crate::records::record_route_decision(&decision, kind);
     decision
 }
 
@@ -555,7 +618,8 @@ fn apply_route_payload(decision: &mut RouteDecision, payload: &serde_json::Value
         .and_then(|r| r.get("rationale"))
         .and_then(serde_json::Value::as_str)
         .map(str::to_string);
-    // Advisory only — recorded for the evidence line, never acted on.
+    // The router's model pick — recorded for the evidence line; applied as
+    // the session model only when the caller drives automatic selection.
     decision.model_id = route
         .and_then(|r| r.get("model_id"))
         .and_then(serde_json::Value::as_str)
@@ -635,6 +699,31 @@ fn apply_route_payload(decision: &mut RouteDecision, payload: &serde_json::Value
                 .collect()
         })
         .unwrap_or_default();
+    // Decider-backed second opinion on uncertain routes. The wire key is
+    // historical (`jeff1_second_opinion`); the value is advisory and never
+    // changes the routed tier. User-facing text must call it a "second
+    // opinion", never "Jeff-1".
+    decision.second_opinion = route
+        .and_then(|r| r.get("jeff1_second_opinion"))
+        .and_then(|o| {
+            let tier = o.get("tier")?.as_str()?;
+            Some(SecondOpinion {
+                tier: tier.to_string(),
+                confidence: o
+                    .get("confidence")
+                    .and_then(serde_json::Value::as_f64)
+                    .filter(|c| c.is_finite()),
+                agree: o
+                    .get("agree")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+                rationale: o
+                    .get("rationale")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+            })
+        });
     decision.calibrated_probabilities = route
         .and_then(|r| r.get("calibrated_probabilities"))
         .and_then(serde_json::Value::as_object)
@@ -1097,13 +1186,13 @@ mod tests {
         assert!(!line.contains("uncertain=true"));
     }
 
-    /// The ranked-models surface is advisory only: parsing it records the
-    /// suggestion, and there is no code path here that can switch models.
-    /// (Enforced structurally — this crate has no `lms`/switch API — and
-    /// pinned here so a future change can't sneak one in unnoticed: the
-    /// decision carries no model handle, only strings.)
+    /// The ranked-models surface drives model selection only when the user
+    /// opted into [`ModelSelection::Auto`]: parsing records the ranking, and
+    /// [`RouteDecision::auto_model_pick`] yields the best-value pick solely
+    /// for `Auto` (explicit user configuration wins). The thinking
+    /// resolution stays a pure function of thinking mode + decision.
     #[test]
-    fn ranked_models_never_trigger_a_switch() {
+    fn ranked_models_drive_auto_selection_only() {
         let mut d = RouteDecision::fail_open(&SystemOneConfig::default(), None);
         let payload = serde_json::json!({
             "route": {
@@ -1115,10 +1204,64 @@ mod tests {
         });
         apply_route_payload(&mut d, &payload);
         assert_eq!(d.best_value_model(), Some("tiny-model"));
-        // The session's effective effort/model selection are untouched by the
-        // ranking: resolution is a pure function of thinking mode + decision.
+        // Auto: the pick is offered to the caller (which resolves it against
+        // its own model catalog; unknown ids keep the current model).
+        assert_eq!(d.auto_model_pick(ModelSelection::Auto), Some("tiny-model"));
+        // Pinned: explicit user configuration wins — no pick.
+        assert_eq!(d.auto_model_pick(ModelSelection::Pinned), None);
+        // No ranking sent: nothing to pick from, even under Auto.
+        let empty = RouteDecision::fail_open(&SystemOneConfig::default(), None);
+        assert_eq!(empty.auto_model_pick(ModelSelection::Auto), None);
+        // The session's thinking resolution is untouched by the ranking:
+        // resolution is a pure function of thinking mode + decision.
         assert_eq!(ThinkingMode::Auto.resolve(&d), d.effort);
         assert_eq!(ModelSelection::default(), ModelSelection::Pinned);
+    }
+
+    /// The decider-backed second opinion is parsed from the historical
+    /// `jeff1_second_opinion` wire key, stays advisory, and surfaces in the
+    /// evidence line — never labeled "Jeff-1" in user-facing text.
+    #[test]
+    fn second_opinion_parsed_from_historical_key() {
+        let mut d = RouteDecision::fail_open(&SystemOneConfig::default(), None);
+        let payload = serde_json::json!({
+            "route": {
+                "tier": "heavy",
+                "uncertain": true,
+                "jeff1_second_opinion": {
+                    "tier": "balanced",
+                    "confidence": 0.62,
+                    "agree": false,
+                    "rationale": "task looks mid-weight",
+                },
+            },
+        });
+        apply_route_payload(&mut d, &payload);
+        let op = d.second_opinion.as_ref().expect("second opinion parsed");
+        assert_eq!(op.tier, "balanced");
+        assert!((op.confidence.unwrap() - 0.62).abs() < 1e-9);
+        assert!(!op.agree);
+        assert_eq!(op.rationale, "task looks mid-weight");
+        // The routed tier is unchanged by the advisory.
+        assert_eq!(d.tier, Some(Tier::Heavy));
+        let line = d.evidence_line(RouterStatus::AlreadyRunning);
+        assert!(line.contains("second_opinion=balanced:disagree"));
+        assert!(!line.to_lowercase().contains("jeff-1"), "never label it Jeff-1");
+    }
+
+    #[test]
+    fn second_opinion_absent_or_mistyped_is_none() {
+        // Older shims omit the key entirely.
+        let mut d = RouteDecision::fail_open(&SystemOneConfig::default(), None);
+        apply_route_payload(&mut d, &serde_json::json!({"route": {"tier": "balanced"}}));
+        assert!(d.second_opinion.is_none());
+        // Mistyped values are ignored, never panics.
+        let mut d2 = RouteDecision::fail_open(&SystemOneConfig::default(), None);
+        apply_route_payload(
+            &mut d2,
+            &serde_json::json!({"route": {"jeff1_second_opinion": {"tier": 42}}}),
+        );
+        assert!(d2.second_opinion.is_none());
     }
 
     #[test]

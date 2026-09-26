@@ -103,25 +103,22 @@ SPEED_DEFAULTS = {
     "enabled": True,
     "systemone_urls": [
         "http://127.0.0.1:8765/v1/systemone/route",
-        "http://127.0.0.1:8079/v1/systemone/route",
     ],
     "systemone_timeout": 3,
     # Fail-open effort matches grok-local's own default_reasoning_effort.
     "default_effort": "high",
     "permission_mode_default": "auto",
-    # Local LM Studio models. Advisory only: the adapter NEVER loads or
-    # unloads models (one model at a time on this hardware; never unload a
-    # model Ryan loaded himself). Ids are validated against the LM Studio
-    # library; the loaded model is always an acceptable answer.
-    "planner_model": "ornith-1.5-35b-a3b",
+    # Local LM Studio models. No model ids are hard-coded anywhere: the
+    # planner and executor run on the currently loaded model (falling back
+    # to the first library model only as a label), tier picks resolve
+    # against the live LM Studio library, and unknown ids fail open to the
+    # loaded model. The adapter NEVER loads or unloads models (one model at
+    # a time on this hardware; never unload a model the user loaded
+    # themselves) -- the auto_model_switch path was removed entirely 2026-09-26.
+    "planner_model": None,
     "planner_effort": "high",
     "executor_effort": "low",
-    "tier_models": {
-        "edge": "ornith-1.5-9b",
-        "economy": "ornith-1.5-9b",
-        "balanced": "ornith-1.5-35b-a3b",
-        "heavy": "ornith-1.5-35b-a3b",
-    },
+    "tier_models": {},
     # Per-tier loop caps consumed by _grok_one_shot (max_turns) and
     # _ralph_run (ralph_cap). Values mirror the pre-existing loop bounds:
     # one-shot max_turns defaulted to 4, ralph iterations to 10 and
@@ -135,15 +132,10 @@ SPEED_DEFAULTS = {
         "balanced": {"effort": "medium", "max_turns": 6, "ralph_cap": 8},
         "heavy": {"effort": "high", "max_turns": 10, "ralph_cap": 12},
     },
-    # Opt-in model switching, DEFAULT OFF. Ryan's standing rule: the adapter
-    # NEVER unloads a model Ryan loaded himself (one model at a time on this
-    # hardware). When flipped on (config [speed] auto_model_switch = true),
-    # _grok_one_shot unloads the loaded model and loads the routed
-    # local_model before running; it re-verifies afterwards and logs loudly.
-    # Do NOT enable this yourself -- his call only.
-    "auto_model_switch": False,
-    # "auto" (default): keep the repaired behavior. A list of server NAMES
-    # from config.toml [mcp_servers.*] is resolved to per-session ACP entries.
+    # REMOVED 2026-09-26: there is no model-switch path anymore. The
+    # standing no-unload rule — never unload a model the user loaded
+    # themselves — is enforced structurally: the adapter has no
+    # load/unload code path at all.
     "default_mcp_servers": "auto",
     "ralph_max_iterations": 10,
     "ralph_done_marker": "DONE",
@@ -316,8 +308,11 @@ _systemone_cache = {}
 
 def _pick_local_model(tier, model_id):
     """Map a SystemOne tier/registry model id to an LM Studio library model id.
-    Advisory only -- the adapter never triggers a model load; the currently
-    loaded model is always acceptable. Returns None when nothing matches."""
+
+    The adapter never triggers a model load; the currently loaded model is
+    always acceptable. No ids are hard-coded: explicit tier_models config
+    entries (if any) resolve against the live library, else the loaded model
+    wins. Returns None when nothing matches."""
     cfg = speed_config()
     library = set(lmstudio_library())
     if model_id and model_id in library:
@@ -377,43 +372,6 @@ def _tier_caps(tier, cfg):
     return caps
 
 
-def _maybe_switch_model(route):
-    """Opt-in only (config auto_model_switch, default False): unload the
-    loaded model and load the routed local_model, then re-verify.
-
-    Logs loudly to stderr so it is unmissable in MCP host logs. Returns a
-    dict describing what happened. NEVER called unless Ryan flips the flag."""
-    target = route.get("local_model")
-    loaded = route.get("loaded_model")
-    if not target or not loaded:
-        return {"switched": False, "reason": "no local_model or loaded_model in route"}
-    if target == loaded:
-        return {"switched": False, "reason": "target already loaded"}
-    print("grok-local-adapter: auto_model_switch ON -- unloading %s, loading %s"
-          % (loaded, target), file=sys.stderr, flush=True)
-    detail = {"switched": False, "unloaded": loaded, "target": target}
-    try:
-        u = subprocess.run([LMS_BIN, "unload", loaded], capture_output=True,
-                           text=True, timeout=120)
-        detail["unload_rc"] = u.returncode
-        if u.returncode:
-            detail["unload_stderr"] = u.stderr.strip()[-500:]
-        l = subprocess.run([LMS_BIN, "load", target], capture_output=True,
-                           text=True, timeout=600)
-        detail["load_rc"] = l.returncode
-        if l.returncode:
-            detail["load_stderr"] = l.stderr.strip()[-500:]
-    except Exception as exc:
-        detail["error"] = str(exc)
-    _loaded_model_cache.update(at=0.0, model=None)  # force re-check
-    now = lmstudio_loaded_model()
-    detail["verified_loaded"] = now
-    detail["switched"] = (now == target)
-    print("grok-local-adapter: auto_model_switch result switched=%s verified=%s"
-          % (detail["switched"], now), file=sys.stderr, flush=True)
-    return detail
-
-
 def _mcp_server_inventory():
     """Name + description for configured MCP servers from config.toml
     [mcp_servers] (the same source the grok CLI reads). Fail-open []."""
@@ -463,6 +421,126 @@ def _suggest_mcp_servers(task_text, task_labels):
     return scored
 
 
+def _parse_second_opinion(route):
+    """Decider-backed second opinion on uncertain routes, parsed from the
+    historical `jeff1_second_opinion` wire key. Advisory only -- never
+    changes the routed tier. User-facing keys and text call it a "second
+    opinion", never "Jeff-1"."""
+    raw = route.get("jeff1_second_opinion")
+    if not isinstance(raw, dict):
+        return None
+    tier = raw.get("tier")
+    if not isinstance(tier, str) or not tier:
+        return None
+    conf = raw.get("confidence")
+    return {
+        "tier": tier,
+        "confidence": conf if isinstance(conf, (int, float)) else None,
+        "agree": bool(raw.get("agree", False)),
+        "rationale": str(raw.get("rationale") or ""),
+    }
+
+
+def _records_path():
+    return GROK_LOCAL_HOME / "systemone" / "decision_records.jsonl"
+
+
+def _record_route_decision(decision, kind):
+    """Append one SystemOne-compatible decision record (JSONL). Fail-open:
+    every I/O error is swallowed -- logging never breaks the route.
+
+    Shape follows systemone/battery/fit_types.py rows
+    ({"type", "gold", "logits"|"probs"}). `gold` is omitted: the correct
+    tier isn't knowable at route time, and fabricating it would poison the
+    temperature fit."""
+    try:
+        cal = decision.get("calibrated_probabilities") or {}
+        probs = [p for _, p in sorted(cal.items(), key=lambda kv: kv[1],
+                                      reverse=True)
+                 if isinstance(p, (int, float))]
+        record = {
+            "type": "choice",
+            "probs": [float(p) for p in probs],
+            "ts": int(time.time()),
+            "client": "grok-local-acp-adapter",
+            "task_kind": kind,
+            "source": decision.get("source"),
+            "tier": decision.get("tier"),
+            "selected": decision.get("tier"),
+            "confidence": decision.get("confidence"),
+            "margin": decision.get("margin"),
+            "uncertain": decision.get("uncertain"),
+        }
+        path = _records_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as f:
+            f.write(json.dumps(record) + "\n")
+    except Exception:
+        pass
+
+
+def _rank_plans_url(route_url):
+    """Derive a /v1/systemone/rank-plans URL from a configured /route URL.
+    Returns None for unrecognized paths (never invent one we don't know)."""
+    if "/v1/systemone/route" in route_url:
+        return route_url.replace("/v1/systemone/route", "/v1/systemone/rank-plans")
+    return None
+
+
+def _rank_plans(task_desc, plans):
+    """Rank candidate plans via SystemOne POST /v1/systemone/rank-plans.
+
+    `plans` is a list of {"id", "text"} dicts. Returns (winner_index,
+    rankings): the winner is the input index with the highest score;
+    fail-open -- on any error the winner is 0 and every ranking carries
+    score None (input order preserved, the original first plan runs).
+    A single plan always wins; the tool requires two or more."""
+    cfg = speed_config()
+    fail = [({"id": p.get("id", str(i)), "score": None, "p_success": None,
+              "cost_penalty": None, "est_steps": None})
+            for i, p in enumerate(plans)]
+    if not plans or not cfg.get("enabled", True):
+        return 0, fail
+    body = json.dumps({
+        "task": str(task_desc)[:1500],
+        "plans": [{"id": p.get("id", str(i)),
+                   "text": str(p.get("text", ""))[:2000]}
+                  for i, p in enumerate(plans)],
+        "client": NAME,
+    }).encode()
+    for url in cfg.get("systemone_urls", []):
+        rp_url = _rank_plans_url(url)
+        if not rp_url:
+            continue
+        try:
+            req = urllib.request.Request(rp_url, data=body, method="POST",
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=cfg.get("systemone_timeout", 3)) as r:
+                payload = json.loads(r.read().decode("utf-8"))
+            ranked = payload.get("rankings") or payload.get("ranked_plans") or []
+            by_id = {str(r.get("id")): r for r in ranked
+                     if isinstance(r, dict) and r.get("id") is not None}
+            rankings = []
+            for i, p in enumerate(plans):
+                pid = str(p.get("id", str(i)))
+                r = by_id.get(pid, {})
+                score = r.get("score")
+                rankings.append({
+                    "id": pid,
+                    "score": score if isinstance(score, (int, float)) else None,
+                    "p_success": r.get("p_success"),
+                    "cost_penalty": r.get("cost_penalty"),
+                    "est_steps": r.get("est_steps"),
+                })
+            scored = [(i, r["score"]) for i, r in enumerate(rankings)
+                      if isinstance(r["score"], (int, float))]
+            winner = max(scored, key=lambda t: t[1])[0] if scored else 0
+            return winner, rankings
+        except Exception:
+            continue
+    return 0, fail
+
+
 def systemone_route(task_desc, kind="prompt", session_id=None):
     """Ask SystemOne for a routing decision for a task.
 
@@ -491,11 +569,14 @@ def systemone_route(task_desc, kind="prompt", session_id=None):
         "task_labels": [],
         "suggested_mcp_servers": [], "suggestion_detail": [],
         "suggestion_note": _SUGGESTION_NOTE,
+        "calibrated_probabilities": {}, "margin": None, "uncertain": None,
+        "ranked_models": [], "second_opinion": None,
         "error": None,
     }
     if not cfg.get("enabled", True):
         decision["error"] = "speed stack disabled in config"
         decision["local_model"] = decision["loaded_model"] or cfg.get("planner_model")
+        _record_route_decision(decision, kind)
         return _cache_route(session_id, decision)
     body = json.dumps({"task": str(task_desc)[:500], "kind": kind,
                        "client": NAME}).encode()
@@ -516,6 +597,7 @@ def systemone_route(task_desc, kind="prompt", session_id=None):
                 caps = dict(_EFFORT_CANONICAL[shim_effort])
             task_labels = [str(lb) for lb in (route.get("task_labels") or []) if lb]
             suggestions = _suggest_mcp_servers(task_desc, task_labels)
+            cal = route.get("calibrated_probabilities")
             decision.update(
                 source="systemone", url=url, tier=tier or None, model_id=model_id,
                 rationale=route.get("rationale"), confidence=route.get("confidence"),
@@ -525,12 +607,22 @@ def systemone_route(task_desc, kind="prompt", session_id=None):
                 task_labels=task_labels,
                 suggested_mcp_servers=[s["name"] for s in suggestions],
                 suggestion_detail=suggestions,
-                permission_mode=route.get("permission_mode") or cfg.get("permission_mode_default", "auto"))
+                permission_mode=route.get("permission_mode") or cfg.get("permission_mode_default", "auto"),
+                calibrated_probabilities={str(k): v for k, v in cal.items()
+                                          if isinstance(v, (int, float))}
+                if isinstance(cal, dict) else {},
+                margin=route.get("margin") if isinstance(route.get("margin"), (int, float)) else None,
+                uncertain=route.get("uncertain") if isinstance(route.get("uncertain"), bool) else None,
+                ranked_models=[str(m.get("model_id")) for m in (route.get("ranked_models") or [])
+                               if isinstance(m, dict) and m.get("model_id")],
+                second_opinion=_parse_second_opinion(route))
+            _record_route_decision(decision, kind)
             return _cache_route(session_id, decision)
         except Exception as exc:
             last_err = "%s: %s" % (url, exc)
     decision["error"] = last_err or "no systemone urls configured"
     decision["local_model"] = decision["loaded_model"] or cfg.get("planner_model")
+    _record_route_decision(decision, kind)
     return _cache_route(session_id, decision)
 
 
@@ -539,8 +631,9 @@ def _grok_one_shot(prompt, cwd, effort="auto", timeout=300, max_turns=None,
     """Run one bounded headless turn. effort='auto' asks SystemOne (fail-open
     to the config default); the route decision supplies --reasoning-effort,
     --max-turns (when max_turns is unset), and ralph_cap. An explicit
-    max_turns always wins. Model switching happens only when config
-    auto_model_switch is true (default false -- Ryan's never-unload rule)."""
+    max_turns always wins. The adapter never loads or unloads models --
+    inference runs on whatever model is loaded (the standing no-unload
+    rule)."""
     cfg = speed_config()
     if effort == "auto":
         route = systemone_route(prompt, kind=task_hint)
@@ -549,8 +642,6 @@ def _grok_one_shot(prompt, cwd, effort="auto", timeout=300, max_turns=None,
             max_turns = route.get("max_turns") or _tier_caps(None, cfg)["max_turns"]
         if permission_mode is None:
             permission_mode = route.get("permission_mode")
-        if cfg.get("auto_model_switch"):
-            _maybe_switch_model(route)
     if max_turns is None:
         max_turns = 4  # legacy bound for explicit-effort calls
     if permission_mode is None:
@@ -767,7 +858,12 @@ def _ralph_run(args):
 def _plan_then_execute(args):
     """Plan-then-execute: a high-effort planner writes a plan artifact, then a
     fast executor runs it. Both roles use the loaded local LM Studio model --
-    no model is ever loaded or unloaded."""
+    no model is ever loaded or unloaded.
+
+    When `candidate_plans` (a list of 2+ plan texts) is supplied, the plans
+    are ranked via SystemOne `POST /v1/systemone/rank-plans` and the winner
+    is executed (fail-open: original-first on any ranking error). Otherwise
+    the planner generates a single plan as before."""
     cfg = speed_config()
     task = args.get("task")
     if not isinstance(task, str) or not task.strip():
@@ -780,13 +876,27 @@ def _plan_then_execute(args):
     plan_path = args.get("plan_path") or os.path.join(
         plans_dir, "plan-%s.md" % time.strftime("%Y%m%d-%H%M%S"))
     loaded = lmstudio_loaded_model()
-    plan_prompt = (
-        "Write a concrete, step-by-step execution plan for the task below. Output ONLY "
-        "the plan as markdown (numbered steps, files involved, how to verify each step). "
-        "Do not execute anything.\n\nTask: %s" % task.strip())
-    plan = _grok_one_shot(plan_prompt, cwd, effort=cfg.get("planner_effort", "high"),
-                          timeout=int(args.get("plan_timeout", 300)),
-                          max_turns=int(args.get("plan_max_turns", 6)), task_hint="plan")
+    candidates = args.get("candidate_plans")
+    ranking = None
+    if isinstance(candidates, list) and len(candidates) >= 2:
+        plan_inputs = [{"id": "plan-%d" % i, "text": str(c)}
+                       for i, c in enumerate(candidates) if str(c).strip()]
+        if len(plan_inputs) >= 2:
+            winner, rankings = _rank_plans(task.strip(), plan_inputs)
+            plan = plan_inputs[winner]["text"]
+            ranking = {"winner": plan_inputs[winner]["id"], "rankings": rankings}
+        else:
+            plan = str(candidates[0])
+    elif isinstance(candidates, list) and len(candidates) == 1:
+        plan = str(candidates[0])
+    else:
+        plan_prompt = (
+            "Write a concrete, step-by-step execution plan for the task below. Output ONLY "
+            "the plan as markdown (numbered steps, files involved, how to verify each step). "
+            "Do not execute anything.\n\nTask: %s" % task.strip())
+        plan = _grok_one_shot(plan_prompt, cwd, effort=cfg.get("planner_effort", "high"),
+                              timeout=int(args.get("plan_timeout", 300)),
+                              max_turns=int(args.get("plan_max_turns", 6)), task_hint="plan")
     with open(plan_path, "w") as f:
         f.write("# Plan\n\nTask: %s\n\nPlanner effort: %s\n\n%s\n"
                 % (task.strip(), cfg.get("planner_effort", "high"), plan))
@@ -797,14 +907,18 @@ def _plan_then_execute(args):
     result = _grok_one_shot(exec_prompt, cwd, effort=exec_effort,
                             timeout=int(args.get("timeout", 600)),
                             max_turns=int(args.get("max_turns", 10)), task_hint="execute")
-    return {"task": task.strip(), "plan_path": plan_path, "plan": plan,
-            "planner": {"model": cfg.get("planner_model"), "effort": cfg.get("planner_effort", "high")},
-            "executor": {"model": loaded or cfg.get("planner_model"), "effort": exec_effort,
-                         "systemone_tier": exec_route.get("tier"),
-                         "systemone_source": exec_route.get("source")},
-            "result": result,
-            "note": "Planner and executor both ran on the loaded LM Studio model%s; "
-                    "no model was loaded or unloaded." % (" (%s)" % loaded if loaded else "")}
+    planner_model = cfg.get("planner_model") or loaded
+    out = {"task": task.strip(), "plan_path": plan_path, "plan": plan,
+           "planner": {"model": planner_model, "effort": cfg.get("planner_effort", "high")},
+           "executor": {"model": loaded or planner_model, "effort": exec_effort,
+                        "systemone_tier": exec_route.get("tier"),
+                        "systemone_source": exec_route.get("source")},
+           "result": result,
+           "note": "Planner and executor both ran on the loaded LM Studio model%s; "
+                   "no model was loaded or unloaded." % (" (%s)" % loaded if loaded else "")}
+    if ranking is not None:
+        out["plan_ranking"] = ranking
+    return out
 
 
 def _slash_verify(args):
@@ -931,7 +1045,8 @@ TOOLS = [
     {"name": "grok_local_lmstudio_models", "description": "List LM Studio's model library and which model is currently loaded (observational only; never loads/unloads).", "inputSchema": schema()},
     {"name": "grok_local_tools_batch", "description": "Run multiple INDEPENDENT tool calls concurrently; results return in input order. No ordering guarantees between calls -- do not batch calls that depend on each other's outputs, multiple prompts to the same session, or nested tools_batch.", "inputSchema": schema({"calls": {"type": "array", "description": "List of {tool, arguments} objects. Max 16 per batch.", "items": {"type": "object"}}}, ["calls"])},
     {"name": "grok_local_ralph_run", "description": "Ralph loop: fresh one-shot iterations on a task sharing a progress file; stops on done_marker, a passing test_command, a stall (byte-identical output twice in a row), or the iteration cap. When max_iterations/max_turns are unset, SystemOne's ralph_cap/max_turns apply; explicit values always win.", "inputSchema": schema({"task": {"type": "string"}, "cwd": {"type": "string"}, "max_iterations": {"type": "integer", "description": "Iteration cap. Unset: SystemOne tier ralph_cap (fail-open: high tier = 12)."}, "done_marker": {"type": "string", "default": "DONE"}, "test_command": {"type": "string"}, "progress_file": {"type": "string"}, "timeout": {"type": "integer", "default": 300}, "max_turns": {"type": "integer", "description": "Per-iteration turn cap. Unset: SystemOne tier max_turns."}}, ["task"])},
-    {"name": "grok_local_plan_then_execute", "description": "Plan-then-execute: a high-effort planner writes a plan artifact, then a fast executor runs it. Both roles use the loaded local LM Studio model; nothing is loaded or unloaded.", "inputSchema": schema({"task": {"type": "string"}, "cwd": {"type": "string"}, "plan_path": {"type": "string"}, "timeout": {"type": "integer", "default": 600}, "max_turns": {"type": "integer", "default": 10}}, ["task"])},
+    {"name": "grok_local_plan_then_execute", "description": "Plan-then-execute: a high-effort planner writes a plan artifact, then a fast executor runs it. Both roles use the loaded local LM Studio model; nothing is loaded or unloaded. Accepts optional candidate_plans (2+ plan texts) which are ranked via SystemOne; the winning plan is executed (fail-open: original-first).", "inputSchema": schema({"task": {"type": "string"}, "cwd": {"type": "string"}, "plan_path": {"type": "string"}, "timeout": {"type": "integer", "default": 600}, "max_turns": {"type": "integer", "default": 10}, "candidate_plans": {"type": "array", "description": "Optional 2+ candidate plan texts to rank; the winner is executed.", "items": {"type": "string"}}}, ["task"])},
+    {"name": "grok_local_rank_plans", "description": "Rank 2+ candidate plans via SystemOne POST /v1/systemone/rank-plans. Returns {winner_index, rankings} with scores plus fail-open detail. On any error the winner is 0 and every ranking carries score null (input order preserved).", "inputSchema": schema({"task": {"type": "string"}, "plans": {"type": "array", "description": "Candidate plans, each {id, text}; ids must be unique.", "items": {"type": "object"}}}, ["task", "plans"])},
     {"name": "grok_local_compact_session", "description": "Anchored compaction of the adapter-side transcript: archives the full transcript to ~/.grok-local/transcripts/<session>.jsonl first, then replaces it with a summary preserving permission decisions, file paths touched, and errors.", "inputSchema": schema({"session_id": {"type": "string"}})},
     {"name": "grok_local_slash_verify", "description": "/verify: run build then test commands in the session cwd (auto-detected from package.json/Makefile/pyproject when omitted); returns pass/fail plus output tails.", "inputSchema": schema({"session_id": {"type": "string"}, "cwd": {"type": "string"}, "build_command": {"type": "string"}, "test_command": {"type": "string"}, "timeout": {"type": "integer", "default": 300}})},
     {"name": "grok_local_slash_review", "description": "/review: heuristic review pass over the session's recent transcript plus git diff/status; returns findings.", "inputSchema": schema({"session_id": {"type": "string"}, "cwd": {"type": "string"}})},
@@ -1295,6 +1410,20 @@ def handle(name, args):
         return _ralph_run(args)
     if name == "grok_local_plan_then_execute":
         return _plan_then_execute(args)
+    if name == "grok_local_rank_plans":
+        task = args.get("task")
+        if not isinstance(task, str) or not task.strip():
+            raise ValueError("task must be non-empty")
+        plans = args.get("plans")
+        if not isinstance(plans, list) or len(plans) < 2:
+            raise ValueError("plans must be a list of 2+ {id, text} candidates")
+        inputs = [{"id": str(p.get("id", "plan-%d" % i)), "text": str(p.get("text", ""))}
+                  for i, p in enumerate(plans) if isinstance(p, dict)]
+        winner, rankings = _rank_plans(task.strip(), inputs)
+        return {"task": task.strip(), "winner_index": winner,
+                "winner_id": inputs[winner]["id"] if inputs else None,
+                "rankings": rankings,
+                "fail_open": all(r["score"] is None for r in rankings)}
     if name == "grok_local_compact_session":
         return _compact_session(args)
     if name == "grok_local_slash_verify":

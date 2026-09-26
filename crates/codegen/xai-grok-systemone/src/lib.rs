@@ -54,15 +54,21 @@
 //!   `timeout_secs`, `default_effort`, `auto_start_shim`, `shim_port`,
 //!   `prune_mcp_servers`, `prune_min_confidence`, `thinking`, `model_selection`.
 //!
-//! # Model switching
+//! # Model selection
 //!
-//! Deliberately NOT implemented: the router's model id and `ranked_models`
-//! are advisory only and are logged, never acted on. Ryan's standing rule —
-//! never unload a model he loaded himself — is enforced by simply not having
-//! a code path that does it.
+//! The router's model pick (`model_id`) and the expected-utility ranking
+//! (`ranked_models`) drive actual model selection **only** when the user
+//! opted into [`ModelSelection::Auto`] — and only for ids that resolve
+//! against the caller's model catalog (explicit user configuration always
+//! wins; unknown ids keep the current model; fail-open throughout).
+//! The standing no-unload rule — never unload a model the user loaded
+//! themselves — is enforced because this crate has no load/unload code
+//! path at all: model selection names a model for the caller to route
+//! inference to, exactly like a user-typed model id.
 
 pub mod config;
 pub mod decide;
+pub mod records;
 pub mod route;
 pub mod shim;
 pub mod state;
@@ -72,8 +78,9 @@ pub use config::SystemOneConfig;
 pub use decide::{DecideDecision, DecideError, DecideType, decide};
 pub use route::{
     Effort, ModelSelection, PlanInput, PlanRanking, RankedModel, RankedTool, RouteDecision,
-    RouteSource, ThinkingMode, Tier, rank_plans, route_for_task,
+    RouteSource, SecondOpinion, ThinkingMode, Tier, rank_plans, route_for_task,
 };
+pub use records::{record_decide_decision, record_route_decision};
 pub use shim::{RouterStatus, ensure_router};
 pub use state::LastRoute;
 pub use suggest::{

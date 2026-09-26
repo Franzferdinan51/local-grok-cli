@@ -37,11 +37,12 @@ Install: `cp grok_local_acp_adapter.py /Users/duckets/.local/bin/grok-local-mcp-
 ### Speed stack (v0.5.0)
 | Tool | What |
 |---|---|
-| `grok_local_systemone_route` | Routing decision for a task: POSTs `~/.grok-local` SystemOne (`:8765`, fallback Jeff-1 `:8079`, 3s timeout), maps the tier to `--reasoning-effort` and a permission mode. **Fail-open**: any error/timeout → config defaults, error logged in the decision. Model ids are local LM Studio ids and advisory — the adapter never loads/unloads models. |
+| `grok_local_systemone_route` | Routing decision for a task: POSTs the `~/.grok-local` SystemOne shim (`:8765`, 3s timeout), maps the tier to `--reasoning-effort` and a permission mode. **Fail-open**: any error/timeout → config defaults, error logged in the decision. The model id is a local LM Studio id and advisory — the adapter never loads/unloads models. Decisions surface the decider's calibrated probabilities, margin, `uncertain` flag, expected-utility `ranked_models`, and an advisory `second_opinion`; every route also appends a fail-open decision record to `~/.grok-local/systemone/decision_records.jsonl`. |
 | `grok_local_lmstudio_models` | LM Studio library ids + currently loaded model (observational via `lms ps`; never triggers a load). |
 | `grok_local_tools_batch` | Run independent tool calls concurrently (`ThreadPoolExecutor`, max 8 workers); results in input order, per-call errors captured. **Independent calls only** — no ordering guarantees between them; no nested `tools_batch`; max 16 calls. |
 | `grok_local_ralph_run` | Ralph loop: each iteration spawns a **fresh** one-shot with the progress file prepended; the adapter appends each output to the progress file. Stops on `done_marker` in output (default `DONE`), `test_command` exit 0, **stall** (byte-identical output twice in a row), or `max_iterations` (default 10). Returns a summary + progress file path. |
-| `grok_local_plan_then_execute` | Planner (high effort) writes a plan artifact to `~/.grok-local/plans/`; executor (SystemOne-routed effort, default low) runs it. Both roles use the loaded local model; if only one model is loaded, both roles use it. |
+| `grok_local_plan_then_execute` | Planner (high effort) writes a plan artifact to `~/.grok-local/plans/`; executor (SystemOne-routed effort, default low) runs it. Both roles use the loaded local model; if only one model is loaded, both roles use it. Optional `candidate_plans` (2+ plan texts) are ranked via SystemOne `rank-plans`; the winner is executed (fail-open: original-first). |
+| `grok_local_rank_plans` | Rank 2+ candidate plans via SystemOne `POST /v1/systemone/rank-plans`: returns `{winner_index, rankings}` with scores. **Fail-open**: on any error the winner is 0 and every ranking carries `score: null` (input order preserved). |
 | `grok_local_compact_session` | Anchored compaction of the **adapter-side** transcript: writes the full raw transcript to `~/.grok-local/transcripts/<session>.jsonl` first, then replaces it with a summary preserving permission decisions, file paths touched, and error messages. Note: the agent process keeps its own context — for a true reset, close the session and start fresh seeded with the summary. |
 | `grok_local_slash_verify` | `/verify`: run build then test in the session cwd (auto-detects `package.json` → npm, `Makefile` → make, `pyproject.toml` → pytest when no commands given). Returns pass/fail + output tails. |
 | `grok_local_slash_review` | `/review`: heuristic findings from the recent transcript (tracebacks, errors, permission denials) plus `git diff --stat` / `git status`. |
@@ -55,16 +56,15 @@ systemone_urls = ["http://127.0.0.1:8765/v1/systemone/route"]
 systemone_timeout = 3
 default_effort = "high"        # fail-open effort (matches grok-local default)
 permission_mode_default = "auto"
-planner_model = "ornith-1.5-35b-a3b"   # advisory; never auto-loaded
+planner_model = null         # no hard-coded id: unset means "the loaded model"
 planner_effort = "high"
 executor_effort = "low"
+tier_models = {}             # optional explicit tier→library-id map; the
+                             # loaded model is always acceptable and never
+                             # touched (adapter has no load/unload path)
 default_mcp_servers = "auto"   # or a list of [mcp_servers.*] names
 ralph_max_iterations = 10
 ralph_done_marker = "DONE"
-auto_model_switch = false     # DEFAULT OFF -- do NOT enable yourself. When
-                              # true, each auto-routed call unloads the loaded
-                              # model and loads the routed local_model
-                              # (Ryan's never-unload rule).
 ```
 
 Tier mapping (code defaults, overridable in config): SystemOne
@@ -73,9 +73,9 @@ Tier mapping (code defaults, overridable in config): SystemOne
 string per tier (e.g. `economy = "low"`) is still accepted for backward
 compat and maps to that effort's canonical caps. Fail-open (shim down)
 uses the `high` tier's caps.
-Advisory local models `edge`/`economy` → `ornith-1.5-9b`,
-`balanced`/`heavy` → `ornith-1.5-35b-a3b` (validated against the LM Studio
-library; the loaded model is always acceptable).
+No model ids are hard-coded anywhere: tier picks resolve against the live
+LM Studio library, and the currently loaded model is always acceptable —
+the adapter never loads or unloads models (no load/unload path exists).
 
 ## Speed-stack design notes
 

@@ -935,12 +935,20 @@ pub async fn run_single_turn(
     {
         agent_config.reasoning_effort_override = Some(effort);
     }
-    // `--model auto`: automatic model selection. The router's pick is advisory
-    // only — the default model is left untouched, nothing is switched or
-    // unloaded. A named `--model` behaves as before.
+    // `--model auto`: automatic model selection. The router's best-value
+    // pick (top of the expected-utility ranking) becomes the default model
+    // for this run, resolved against the model catalog by the normal `-m`
+    // path (unknown ids fall back silently — fail-open). A named `--model`
+    // behaves as before and always wins over the router.
     let model_for_switch = headless_model_switch_target(options.model.as_deref());
     if let Some(model) = model_for_switch {
         agent_config.default_model_override = Some(model.to_string());
+    } else if model_selection == xai_grok_systemone::ModelSelection::Auto
+        && let Some(decision) = systemone_route.as_ref()
+        && let Some(pick) = decision.auto_model_pick(model_selection)
+    {
+        eprint_line(&format!("systemone: model selection auto → {pick}"));
+        agent_config.default_model_override = Some(pick.to_string());
     }
     agent_config.resolve_runtime_fields(&xai_grok_shell::agent::config::RuntimeResolutionContext {
         raw_config: &raw_config,
