@@ -503,14 +503,78 @@ fn tcp_reachable(port: u16) -> bool {
 /// Minimal blocking HTTP GET over a raw TCP stream. Returns the parsed JSON
 /// body, or `None` on any failure (connection refused, timeout, bad JSON).
 fn probe_http_json(port: u16, path: &str) -> Option<serde_json::Value> {
-    let addr: std::net::SocketAddr = format!("127.0.0.1:{port}").parse().ok()?;
+    probe_http_json_at("127.0.0.1", port, path)
+}
+
+/// Default shim base URL (the `[systemone] urls` default minus the route path).
+const DEFAULT_SHIM_BASE: &str = "http://127.0.0.1:8765";
+
+/// Base URL of the first configured route endpoint:
+/// `http://host:port/v1/systemone/route` -> `http://host:port`.
+/// `None` when the configured URLs don't follow the route convention.
+fn first_route_base(cfg: &SystemOneConfig) -> Option<String> {
+    cfg.urls
+        .first()?
+        .strip_suffix("/v1/systemone/route")
+        .map(str::to_string)
+}
+
+/// Split an `http(s)://host[:port]` base URL into `(host, port)`.
+/// Returns `None` for anything that doesn't look like one.
+fn parse_base_url(base: &str) -> Option<(String, u16)> {
+    let (rest, default_port) = if let Some(r) = base.strip_prefix("http://") {
+        (r, 80)
+    } else if let Some(r) = base.strip_prefix("https://") {
+        (r, 443)
+    } else {
+        return None;
+    };
+    let authority = rest
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .rsplit('@')
+        .next()
+        .unwrap_or("");
+    if authority.is_empty() {
+        return None;
+    }
+    let (host, port) = if let Some(bracketed) = authority.strip_prefix('[') {
+        let end = bracketed.find(']')?;
+        let port = bracketed[end + 1..]
+            .strip_prefix(':')
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(default_port);
+        (&bracketed[..end], port)
+    } else if let Some(colon) = authority.rfind(':') {
+        let port: u16 = authority[colon + 1..].parse().ok()?;
+        (&authority[..colon], port)
+    } else {
+        (authority, default_port)
+    };
+    if host.is_empty() {
+        return None;
+    }
+    Some((host.to_string(), port))
+}
+
+/// True for loopback hosts, where grok-local can start the shim itself.
+fn is_localhost_host(host: &str) -> bool {
+    matches!(host, "127.0.0.1" | "localhost" | "::1")
+}
+
+/// Minimal blocking HTTP GET over a raw TCP stream, against an explicit
+/// host:port. Returns the parsed JSON body, or `None` on any failure.
+fn probe_http_json_at(host: &str, port: u16, path: &str) -> Option<serde_json::Value> {
+    use std::net::ToSocketAddrs;
+    let addr = format!("{host}:{port}").to_socket_addrs().ok()?.next()?;
     let mut stream =
         std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(700)).ok()?;
     stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
     stream
         .set_write_timeout(Some(Duration::from_secs(2)))
         .ok()?;
-    let req = format!("GET {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+    let req = format!("GET {path} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\n\r\n");
     stream.write_all(req.as_bytes()).ok()?;
     let mut buf = Vec::new();
     {
@@ -520,6 +584,78 @@ fn probe_http_json(port: u16, path: &str) -> Option<serde_json::Value> {
     let text = String::from_utf8_lossy(&buf);
     let body = text.split("\r\n\r\n").nth(1)?;
     serde_json::from_str(body).ok()
+}
+
+/// Minimal blocking HTTP POST with a JSON body over a raw TCP stream.
+/// Returns the parsed JSON body for 2xx responses, `None` otherwise.
+fn probe_http_post_json(
+    host: &str,
+    port: u16,
+    path: &str,
+    body: &str,
+) -> Option<serde_json::Value> {
+    use std::net::ToSocketAddrs;
+    let addr = format!("{host}:{port}").to_socket_addrs().ok()?.next()?;
+    let mut stream =
+        std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(700)).ok()?;
+    stream.set_read_timeout(Some(Duration::from_secs(3))).ok()?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(3)))
+        .ok()?;
+    let req = format!(
+        "POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(req.as_bytes()).ok()?;
+    let mut buf = Vec::new();
+    {
+        use std::io::Read;
+        let _ = stream.read_to_end(&mut buf);
+    }
+    let text = String::from_utf8_lossy(&buf);
+    let status: u16 = text
+        .lines()
+        .next()?
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()?;
+    if !(200..300).contains(&status) {
+        return None;
+    }
+    let response_body = text.split("\r\n\r\n").nth(1)?;
+    serde_json::from_str(response_body).ok()
+}
+
+/// Outcome of the decide-engine connectivity probe.
+struct DecideProbe {
+    ok: bool,
+    backend: Option<String>,
+}
+
+/// POST a tiny `noul` probe to the shim's decide endpoint. Fail-open by
+/// design: any failure returns `ok: false` and the wizard reports it and
+/// moves on — a down decide engine never fails setup.
+fn probe_decide_noul(host: &str, port: u16) -> DecideProbe {
+    let not_ok = DecideProbe {
+        ok: false,
+        backend: None,
+    };
+    // Fixed probe question; no model IDs anywhere.
+    let body = r#"{"state":"onboarding connectivity probe","instructions":"Is this an onboarding connectivity probe? Answer yes.","type":"noul"}"#;
+    let Some(value) = probe_http_post_json(host, port, "/v1/systemone/decide", body) else {
+        return not_ok;
+    };
+    if value.get("type").and_then(|t| t.as_str()) != Some("noul") {
+        return not_ok;
+    }
+    DecideProbe {
+        ok: true,
+        backend: value
+            .get("backend")
+            .and_then(|b| b.as_str())
+            .map(str::to_string),
+    }
 }
 
 /// Model IDs served by LM Studio on `:1234`, if it is up. Detection only —
@@ -612,6 +748,41 @@ fn step_inference<R: BufRead, W: Write>(
 }
 
 /// Returns `false` when the user quits the wizard.
+/// Shim base-URL prompt. Returns `None` when the user quits (`q`).
+fn prompt_shim_url<R: BufRead, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+    opts: OnboardOptions,
+    default_base: &str,
+) -> Option<String> {
+    if opts.accept_defaults {
+        let _ = writeln!(writer, "SystemOne shim URL: {default_base} (default)");
+        return Some(default_base.to_string());
+    }
+    match prompt_line(
+        reader,
+        writer,
+        &format!("SystemOne shim URL? [Enter = {default_base}] (q to skip): "),
+    ) {
+        None => Some(default_base.to_string()),
+        Some(s) if s.eq_ignore_ascii_case("q") || s.eq_ignore_ascii_case("quit") => None,
+        Some(s) if s.is_empty() => Some(default_base.to_string()),
+        Some(s) => {
+            let trimmed = s.trim_end_matches('/').to_string();
+            if parse_base_url(&trimmed).is_some() {
+                Some(trimmed)
+            } else {
+                let _ = writeln!(
+                    writer,
+                    "  \"{s}\" doesn't look like a shim URL — keeping {default_base}."
+                );
+                Some(default_base.to_string())
+            }
+        }
+    }
+}
+
+/// Returns `false` when the user quits the wizard.
 fn step_systemone<R: BufRead, W: Write>(
     reader: &mut R,
     writer: &mut W,
@@ -619,18 +790,113 @@ fn step_systemone<R: BufRead, W: Write>(
     opts: OnboardOptions,
     report: &mut OnboardReport,
 ) -> Result<bool> {
-    report.shim_reachable = tcp_reachable(8765);
+    // Shim URL: default to the base of the currently configured first route
+    // URL (honors GROK_LOCAL_SYSTEMONE_URLS and any saved config); the user
+    // can point grok-local at a shim on another machine.
+    let cfg = SystemOneConfig::load_from(grok_home);
+    let default_base = first_route_base(&cfg).unwrap_or_else(|| DEFAULT_SHIM_BASE.to_string());
+    let Some(shim_url) = prompt_shim_url(reader, writer, opts, &default_base) else {
+        return Ok(false);
+    };
+    let (host, port) = parse_base_url(&shim_url).unwrap_or(("127.0.0.1".to_string(), 8765));
+
+    writeln!(writer, "Probing the shim at {shim_url} ...")?;
+    report.shim_reachable = probe_http_json_at(&host, port, "/healthz").is_some();
     if report.shim_reachable {
-        writeln!(writer, "SystemOne router is reachable on :8765.")?;
+        writeln!(writer, "  The shim is answering — routing is ready.")?;
+        match probe_decide_noul(&host, port) {
+            DecideProbe {
+                ok: true,
+                backend: Some(b),
+            } => writeln!(
+                writer,
+                "  Decide engine answering (backend: {b}) — `grok-local decide` can use it."
+            )?,
+            DecideProbe { ok: true, .. } => writeln!(
+                writer,
+                "  Decide engine answering — `grok-local decide` can use it."
+            )?,
+            DecideProbe { ok: false, .. } => writeln!(
+                writer,
+                "  Decide engine not answering — routing still works; `grok-local decide` will report a clean error if you run it."
+            )?,
+        }
     } else {
         writeln!(
             writer,
-            "SystemOne router not running on :8765 — grok-local starts the shim itself when needed (Unix)."
+            "  The shim is not answering at {shim_url} — continuing in degraded mode."
         )?;
+        writeln!(
+            writer,
+            "  Routing is advisory and fail-open: if the router is down, grok-local just uses its defaults."
+        )?;
+        if is_localhost_host(&host) {
+            writeln!(
+                writer,
+                "  grok-local starts the bundled shim itself when needed (unless GROK_LOCAL_SYSTEMONE_NO_AUTOSTART=1)."
+            )?;
+            writeln!(
+                writer,
+                "  Or start it by hand: python3.11 -m systemone.shim --port {port}"
+            )?;
+        } else {
+            writeln!(
+                writer,
+                "  That URL points at another machine — starting the local shim won't reach it; check the remote shim."
+            )?;
+        }
     }
+
+    // Persist a changed URL through the existing `[systemone] urls` flow.
+    // Custom URLs are explicit: the Jeff-1 `:8079` fallback is not re-added.
+    if shim_url != default_base {
+        let route_url = format!("{shim_url}/v1/systemone/route");
+        if SystemOneConfig::save_systemone_key_at(
+            grok_home,
+            "urls",
+            toml::Value::Array(vec![toml::Value::String(route_url.clone())]),
+        ) {
+            report.config_written = true;
+            writeln!(writer, "Saved: [systemone] urls = [\"{route_url}\"]")?;
+        } else {
+            writeln!(
+                writer,
+                "WARN: could not write the config file — continuing."
+            )?;
+        }
+        // Keep `shim_port` consistent when the chosen shim is local: the
+        // auto-start probe and the `decide` error hint both use it.
+        if is_localhost_host(&host)
+            && port != cfg.shim_port
+            && SystemOneConfig::save_systemone_key_at(
+                grok_home,
+                "shim_port",
+                toml::Value::Integer(port as i64),
+            )
+        {
+            writeln!(writer, "Saved: [systemone] shim_port = {port}")?;
+        }
+    }
+
     writeln!(
         writer,
-        "Routing is advisory and fail-open: if the router is down, grok-local just uses its defaults."
+        "The `grok-local decide` command asks the shim's decision engine a typed question"
+    )?;
+    writeln!(
+        writer,
+        "(choice/score/noul) — handy for second opinions from scripts. The engine is"
+    )?;
+    writeln!(
+        writer,
+        "Mapika/decider-4b (Apache 2.0) or Jeff-1, selected on the shim by"
+    )?;
+    writeln!(
+        writer,
+        "SYSTEMONE_DECISION_BACKEND. Unlike routing, `decide` is not fail-open:"
+    )?;
+    writeln!(
+        writer,
+        "a down shim gives you a clean error and a non-zero exit."
     )?;
 
     let enabled = prompt_yes_no(
@@ -684,7 +950,6 @@ fn step_systemone<R: BufRead, W: Write>(
     Ok(true)
 }
 
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -733,7 +998,7 @@ mod tests {
     fn double_run_is_idempotent() {
         let dir = tempfile::tempdir().unwrap();
         // Scripted: choose pinned (2), keep routing on (y), keep Jeff-1 on (y).
-        let input = b"2\ny\ny\n";
+        let input = b"2\n\ny\ny\n";
         let (r1, _) = run_with_input(input, dir.path(), test_opts());
         assert!(!r1.skipped);
         let first = read_config(dir.path());
@@ -798,6 +1063,133 @@ mod tests {
     /// no-hard-coded-model-IDs rule). Banned words are built from fragments
     /// so the test's own source can't trip the scan; only non-test code is
     /// scanned.
+    /// A custom shim URL is probed at install time and persisted through
+    /// the existing `[systemone] urls` flow. Port 9999 on loopback refuses
+    /// fast, so the degraded path is exercised deterministically.
+    #[test]
+    fn custom_shim_url_is_probed_and_persisted() {
+        let dir = tempfile::tempdir().unwrap();
+        // choice=1 (auto), custom shim URL, routing y, Jeff-1 y.
+        let input = b"1\nhttp://127.0.0.1:9999\ny\ny\n";
+        let (report, out) = run_with_input(input, dir.path(), test_opts());
+        assert!(!report.skipped);
+        assert!(report.config_written);
+        assert!(!report.shim_reachable, "nothing listens on :9999");
+        assert!(
+            out.contains("Probing the shim at http://127.0.0.1:9999"),
+            "{out}"
+        );
+        assert!(out.contains("continuing in degraded mode"), "{out}");
+        assert!(out.contains("fail-open"), "{out}");
+        let cfg = read_config(dir.path());
+        assert!(
+            cfg.contains("http://127.0.0.1:9999/v1/systemone/route"),
+            "{cfg}"
+        );
+        // A local custom port keeps shim_port consistent (auto-start + the
+        // `decide` error hint both use it).
+        assert!(cfg.contains("shim_port = 9999"), "{cfg}");
+    }
+
+    /// A remote custom URL is persisted as-is; the wizard notes that the
+    /// local auto-start can't reach it.
+    #[test]
+    fn remote_shim_url_warns_about_autostart() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = b"1\nhttp://192.0.2.10:8765\ny\ny\n";
+        let (report, out) = run_with_input(input, dir.path(), test_opts());
+        assert!(!report.skipped);
+        assert!(!report.shim_reachable, "TEST-NET-1 is unroutable here");
+        assert!(out.contains("another machine"), "{out}");
+        let cfg = read_config(dir.path());
+        assert!(
+            cfg.contains("http://192.0.2.10:8765/v1/systemone/route"),
+            "{cfg}"
+        );
+        // Remote URL: shim_port stays at its default.
+        assert!(!cfg.contains("shim_port"), "{cfg}");
+    }
+
+    /// Junk input at the URL prompt keeps the current default with a warning.
+    #[test]
+    fn invalid_shim_url_keeps_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = b"1\nnot a url\ny\ny\n";
+        let (report, out) = run_with_input(input, dir.path(), test_opts());
+        assert!(!report.skipped);
+        assert!(out.contains("doesn't look like a shim URL"), "{out}");
+        let cfg = read_config(dir.path());
+        assert!(!cfg.contains("urls ="), "{cfg}");
+    }
+
+    /// `--yes` keeps the default shim URL: no `urls` key is written.
+    #[test]
+    fn yes_flag_keeps_default_shim_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = OnboardOptions {
+            accept_defaults: true,
+            check_only: false,
+        };
+        let (report, _out) = run_with_input(b"", dir.path(), opts);
+        assert!(!report.skipped);
+        let cfg = read_config(dir.path());
+        assert!(!cfg.contains("urls ="), "{cfg}");
+    }
+
+    /// Re-running with a custom URL is idempotent.
+    #[test]
+    fn custom_url_run_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = b"1\nhttp://127.0.0.1:9999\ny\ny\n";
+        let (r1, _) = run_with_input(input, dir.path(), test_opts());
+        assert!(!r1.skipped);
+        let first = read_config(dir.path());
+        let (r2, _) = run_with_input(input, dir.path(), test_opts());
+        assert!(!r2.skipped);
+        let second = read_config(dir.path());
+        assert_eq!(first, second, "second run must not change the config");
+    }
+
+    #[test]
+    fn parse_base_url_cases() {
+        assert_eq!(
+            parse_base_url("http://127.0.0.1:8765"),
+            Some(("127.0.0.1".to_string(), 8765))
+        );
+        assert_eq!(
+            parse_base_url("http://macmini:8765/"),
+            Some(("macmini".to_string(), 8765))
+        );
+        assert_eq!(
+            parse_base_url("https://host.example"),
+            Some(("host.example".to_string(), 443))
+        );
+        assert_eq!(
+            parse_base_url("http://[::1]:8765/x"),
+            Some(("::1".to_string(), 8765))
+        );
+        assert_eq!(parse_base_url("not a url"), None);
+        assert_eq!(parse_base_url(""), None);
+        assert_eq!(parse_base_url("ftp://host/x"), None);
+        assert_eq!(parse_base_url("http:///x"), None);
+    }
+
+    #[test]
+    fn first_route_base_cases() {
+        let mut cfg = SystemOneConfig::default();
+        assert_eq!(
+            first_route_base(&cfg),
+            Some("http://127.0.0.1:8765".to_string())
+        );
+        cfg.urls = vec!["http://macmini:9999/v1/systemone/route".to_string()];
+        assert_eq!(
+            first_route_base(&cfg),
+            Some("http://macmini:9999".to_string())
+        );
+        cfg.urls = vec!["http://macmini:9999/custom".to_string()];
+        assert_eq!(first_route_base(&cfg), None);
+    }
+
     #[test]
     fn wizard_copy_names_no_models() {
         let src = include_str!("onboard_cmd.rs");

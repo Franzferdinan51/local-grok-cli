@@ -91,12 +91,36 @@ pub async fn run(args: DecideArgs) -> Result<()> {
     match ensure_router(&cfg).await {
         RouterStatus::AlreadyRunning | RouterStatus::Started => {}
         RouterStatus::Unavailable => {
+            // Report the actual configured endpoint: with a custom remote
+            // shim URL this is not localhost, and a remote shim cannot be
+            // auto-started from here.
+            let endpoint = cfg
+                .urls
+                .first()
+                .map(|u| u.strip_suffix("/route").unwrap_or(u).to_string())
+                .unwrap_or_else(|| format!("http://127.0.0.1:{}", cfg.shim_port));
+            let host = endpoint
+                .split("://")
+                .nth(1)
+                .unwrap_or("")
+                .split(['/', ':'])
+                .next()
+                .unwrap_or("");
+            let loopback = host == "localhost" || host == "127.0.0.1" || host == "::1";
+            if loopback {
+                bail!(
+                    "SystemOne shim unavailable: nothing is listening at {endpoint} \
+                     and it could not be started automatically. Start it with \
+                     `python3.11 -m systemone.shim --port {0}` (cwd ~/systemone-release), \
+                     or check ~/.grok-local/systemone-shim.log",
+                    cfg.shim_port
+                );
+            }
             bail!(
-                "SystemOne shim unavailable: nothing is listening on 127.0.0.1:{} \
-                 and it could not be started automatically. Start it with \
-                 `python3.11 -m systemone.shim --port {0}` (cwd ~/systemone-release), \
-                 or check ~/.grok-local/systemone-shim.log",
-                cfg.shim_port
+                "SystemOne shim unavailable: nothing is answering at the configured \
+                 remote endpoint {endpoint}, and a remote shim cannot be started \
+                 automatically. Check that the shim is running on the remote host, \
+                 or run `grok-local onboard` to pick a different shim URL."
             );
         }
     }

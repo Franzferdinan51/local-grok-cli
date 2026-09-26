@@ -155,7 +155,15 @@ options, writing `~/.grok-local/config.toml`. It also runs automatically
 the first time you launch grok-local interactively with no config file
 (skip with `--skip-onboarding`, `GROK_LOCAL_SKIP_ONBOARDING=1`, or
 `GROK_LOCAL_ONBOARDING=0`). Non-interactive runs accept defaults via
-`--yes`; `--check` runs the requirements check only.
+`--yes`; `--check` runs the requirements check only. The wizard asks for
+the SystemOne shim base URL (default `http://127.0.0.1:8765`), probes its
+`/healthz` and decide endpoints, and saves your choice to
+`~/.grok-local/config.toml` `[systemone]` `urls` — the same setting the
+runtime reads, so a custom URL (local or remote) is honored everywhere.
+If the shim is unreachable the wizard says so plainly and continues in
+degraded mode (routing off, everything else working); for a remote URL it
+never offers to start a local shim. Shim health is re-checked on every
+launch, not just during onboarding.
 
 ## Building from source
 
@@ -293,6 +301,28 @@ lives on the Mac mini, never on the inference host.
 
 `ranked_tools` from the shim drives MCP/server suggestions (shim-ranked
 provenance); `ranked_models` is advisory-only.
+
+### `grok-local decide`
+
+Ask the SystemOne decision engine a typed question directly — choice ("pick
+a label"), noul ("yes/no with calibrated uncertainty"), or score ("pick a
+level"):
+
+```sh
+grok-local decide "should I rewrite this module?" \
+  --criterion keep="leave the code as-is" \
+  --criterion rewrite="rewrite it cleanly" \
+  --state "module is 800 lines, lightly tested"
+grok-local decide "is this worth doing?" --type noul --state "the task description"
+grok-local decide --type score --criterion bad --criterion okay --criterion great --json
+```
+
+Unlike agent-flow routing this command is **not** fail-open: a down shim, a
+disabled router, or a rejected request surfaces as a clear error with a
+non-zero exit (the configured shim endpoint is named in the error, so a
+custom remote URL is reported as-is). Confidence/temperature conventions are
+adapted from [Mapika/decider](https://github.com/Mapika/decider)
+(Apache 2.0).
 
 ## Repository layout
 
