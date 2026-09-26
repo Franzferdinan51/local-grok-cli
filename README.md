@@ -58,7 +58,7 @@ version and the grok-build version that overlay was applied on.
 
 ```sh
 grok-local --version
-# grok-local 0.5.3 (<git sha>)
+# grok-local 0.5.4 (<git sha>)
 # grok-build 1.0.38 (<SOURCE_REV>)
 ```
 
@@ -218,7 +218,7 @@ The user guide ships with the pager crate:
 — getting started, keyboard shortcuts, slash commands, configuration, theming,
 MCP servers, skills, plugins, hooks, headless mode, sandboxing, and more.
 
-## SystemOne native routing (v0.5.3)
+## SystemOne native routing (v0.5.4)
 
 Two independent selectors, settable per session or per CLI invocation:
 
