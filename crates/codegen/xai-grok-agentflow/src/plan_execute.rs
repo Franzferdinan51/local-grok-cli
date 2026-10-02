@@ -135,16 +135,32 @@ fn has_risky_label(task_labels: &[String]) -> bool {
 /// filenames, case-insensitive).
 pub fn count_file_mentions(task_text: &str) -> usize {
     let mut distinct: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for captures in PATH_LIKE_RE
-        .captures_iter(task_text)
-        .chain(BARE_FILE_RE.captures_iter(task_text))
-    {
-        if let Some(m) = captures.get(0).or_else(|| captures.get(1)) {
+    let mut path_spans: Vec<(usize, usize)> = Vec::new();
+    // Group 1 excludes the leading separator consumed by group 0.
+    for captures in PATH_LIKE_RE.captures_iter(task_text) {
+        if let Some(m) = captures.get(1).or_else(|| captures.get(0)) {
+            path_spans.push((m.start(), m.end()));
             distinct.insert(
                 m.as_str()
                     .trim_matches(|c| "(\"'`".contains(c))
                     .to_ascii_lowercase(),
             );
+        }
+    }
+    // Bare filenames inside an already-counted path (e.g. `a.ts` inside
+    // `src/a.ts`) are the same mention, not a second one.
+    for captures in BARE_FILE_RE.captures_iter(task_text) {
+        if let Some(m) = captures.get(0) {
+            let inside_path = path_spans
+                .iter()
+                .any(|&(s, e)| m.start() >= s && m.end() <= e);
+            if !inside_path {
+                distinct.insert(
+                    m.as_str()
+                        .trim_matches(|c| "(\"'`".contains(c))
+                        .to_ascii_lowercase(),
+                );
+            }
         }
     }
     distinct.len()

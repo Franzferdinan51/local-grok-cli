@@ -536,7 +536,11 @@ fn keyword_matches(keyword: &str, text: &str) -> bool {
                 let s = start + pos;
                 let e = s + kw.len();
                 let before_ok = s == 0 || !bytes[s - 1].is_ascii_alphanumeric();
-                let after_ok = e >= bytes.len() || !bytes[e].is_ascii_alphanumeric();
+                // A trailing plural "s" still counts ("tests" matches "test").
+                let after_ok = e >= bytes.len()
+                    || !bytes[e].is_ascii_alphanumeric()
+                    || (bytes[e] == b's'
+                        && (e + 1 >= bytes.len() || !bytes[e + 1].is_ascii_alphanumeric()));
                 if before_ok && after_ok {
                     return true;
                 }
@@ -1021,7 +1025,9 @@ mod tests {
     fn label_keep_tools_survive_irrelevant_ones_pruned() {
         let tools = tools_named(&["read_file", "image_gen", "bash", "lsp"]);
         let labels = vec!["media".to_string()];
-        let shortlist = compute_tool_shortlist(input(&tools, &labels, "make artwork", Some(0.9)));
+        // NB: "create", not "make" — "make" is a build keyword and would
+        // (correctly) infer the build label too.
+        let shortlist = compute_tool_shortlist(input(&tools, &labels, "create artwork", Some(0.9)));
         assert!(shortlist.keep_names.iter().any(|k| k == "image_gen"));
         assert!(shortlist.disallowed_names.iter().any(|k| k == "lsp"));
         assert!(shortlist.schema_tokens_after < shortlist.schema_tokens_before);

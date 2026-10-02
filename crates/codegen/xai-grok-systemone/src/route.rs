@@ -130,12 +130,15 @@ impl Effort {
     /// extend it for the heaviest work.
     pub fn canonical_caps(self) -> (u32, u32) {
         match self {
-            Self::Off => (4, 4),
-            Self::Low => (4, 4),
-            Self::Medium => (6, 8),
-            Self::High => (10, 12),
-            Self::XHigh => (14, 16),
-            Self::Ultra => (20, 24),
+            // Roomy caps: agentic coding loops burn a turn per tool
+            // round-trip, so tight caps abort long tasks before they converge.
+            // Users can still tighten via `--max-turns` or config.
+            Self::Off => (12, 16),
+            Self::Low => (25, 30),
+            Self::Medium => (50, 60),
+            Self::High => (100, 120),
+            Self::XHigh => (200, 240),
+            Self::Ultra => (400, 480),
         }
     }
 
@@ -948,12 +951,12 @@ mod tests {
 
     #[test]
     fn canonical_caps_match_adapter_and_extend() {
-        assert_eq!(Effort::Off.canonical_caps(), (4, 4));
-        assert_eq!(Effort::Low.canonical_caps(), (4, 4));
-        assert_eq!(Effort::Medium.canonical_caps(), (6, 8));
-        assert_eq!(Effort::High.canonical_caps(), (10, 12));
-        assert_eq!(Effort::XHigh.canonical_caps(), (14, 16));
-        assert_eq!(Effort::Ultra.canonical_caps(), (20, 24));
+        assert_eq!(Effort::Off.canonical_caps(), (12, 16));
+        assert_eq!(Effort::Low.canonical_caps(), (25, 30));
+        assert_eq!(Effort::Medium.canonical_caps(), (50, 60));
+        assert_eq!(Effort::High.canonical_caps(), (100, 120));
+        assert_eq!(Effort::XHigh.canonical_caps(), (200, 240));
+        assert_eq!(Effort::Ultra.canonical_caps(), (400, 480));
     }
 
     #[test]
@@ -1009,7 +1012,7 @@ mod tests {
         apply_route_payload(&mut d, &payload);
         assert_eq!(d.tier, Some(Tier::Heavy));
         assert_eq!(d.effort, Effort::Low);
-        assert_eq!(d.max_turns, 4);
+        assert_eq!(d.max_turns, 25);
         assert_eq!(d.confidence, Some(0.9));
         assert_eq!(d.model_id.as_deref(), Some("ornith-1.5-9b"));
     }
@@ -1022,7 +1025,7 @@ mod tests {
         });
         apply_route_payload(&mut d, &payload);
         assert_eq!(d.effort, Effort::XHigh);
-        assert_eq!(d.max_turns, 14);
+        assert_eq!(d.max_turns, 200);
 
         let mut d2 = RouteDecision::fail_open(&SystemOneConfig::default(), None);
         let payload2 = serde_json::json!({
@@ -1030,7 +1033,7 @@ mod tests {
         });
         apply_route_payload(&mut d2, &payload2);
         assert_eq!(d2.effort, Effort::Ultra);
-        assert_eq!(d2.max_turns, 20);
+        assert_eq!(d2.max_turns, 400);
     }
 
     #[test]
@@ -1043,7 +1046,7 @@ mod tests {
         apply_route_payload(&mut d, &payload);
         assert_eq!(d.model_id.as_deref(), Some("ornith-1.5-35b-a3b"));
         assert_eq!(d.effort, Effort::Medium);
-        assert_eq!(d.max_turns, 6);
+        assert_eq!(d.max_turns, 50);
     }
 
     #[test]
@@ -1163,7 +1166,7 @@ mod tests {
         let d = route_for_task("do a thing", "prompt", &cfg).await;
         assert_eq!(d.source, RouteSource::FailOpen);
         assert_eq!(d.effort, Effort::High);
-        assert_eq!(d.max_turns, 10);
+        assert_eq!(d.max_turns, 100);
         assert!(d.error.as_deref().unwrap_or("").contains("using defaults"));
     }
 

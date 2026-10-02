@@ -533,6 +533,7 @@ pub const PAGER_COMMAND_KEYS: &[&str] = &[
     "show-plan",
     "skills",
     "summarize",
+    "systemone",
     "tasks",
     "terminal-check",
     "terminal-info",

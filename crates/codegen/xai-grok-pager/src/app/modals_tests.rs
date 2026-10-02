@@ -8,7 +8,8 @@ use crate::app::agent_view::AgentPane;
 use crate::app::agent_view::test_fixtures::make_agent;
 use crate::views::modal::ActiveModal;
 
-/// Ctrl+M, then Enter on a reasoning model: the effort sub-menu opens on the model's default effort row.
+/// Ctrl+M, then Enter on a reasoning model: the effort sub-menu opens on
+/// the "(model only)" default row, with the effort rows after it.
 #[test]
 fn arg_picker_effort_phase_opens_on_default_row() {
     let mut agent = make_agent();
@@ -38,6 +39,11 @@ fn arg_picker_effort_phase_opens_on_default_row() {
         "Ctrl+M must open the /model picker in the model phase"
     );
 
+    // Row 0 is always "Auto (SystemOne)"; step down to the reasoning model.
+    agent.handle_input(
+        &Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+        &registry,
+    );
     agent.handle_input(
         &Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
         &registry,
@@ -52,9 +58,14 @@ fn arg_picker_effort_phase_opens_on_default_row() {
         panic!("expected the /model picker to chain into the effort phase");
     };
     assert_eq!("Reasoning X ", args_query);
-    assert_eq!(1, state.selected);
+    assert_eq!(0, state.selected);
+    assert_eq!(
+        Some("Reasoning X"),
+        items.first().map(|item| item.insert_text.as_str())
+    );
+    // Effort rows follow strongest-first: xhigh, high, medium, low.
     assert_eq!(
         Some("Reasoning X high"),
-        items.get(1).map(|item| item.insert_text.as_str())
+        items.get(2).map(|item| item.insert_text.as_str())
     );
 }

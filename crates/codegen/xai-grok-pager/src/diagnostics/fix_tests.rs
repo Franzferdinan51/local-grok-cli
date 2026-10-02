@@ -1089,7 +1089,10 @@ fn shell_aliases_expand_to_exact_argv_and_bypass_is_explicit() {
         );
         let mut shell = std::process::Command::new(bash);
         shell
-            .args(["-ic", &command])
+            // Hermetic: never read the developer's real ~/.bashrc (it can
+            // prepend PATH entries whose `grok` would shadow the fake).
+            .args(["--noprofile", "--norc", "-ic", &command])
+            .env("HOME", temp.path())
             .env(
                 "PATH",
                 format!(
@@ -1152,7 +1155,13 @@ fn shell_aliases_expand_to_exact_argv_and_bypass_is_explicit() {
     };
     let mut shell = std::process::Command::new(bash);
     shell
-        .args(["-ic", "alias ssh='grok wrap ssh'; command ssh host"])
+        .args([
+            "--noprofile",
+            "--norc",
+            "-ic",
+            "alias ssh='grok wrap ssh'; command ssh host",
+        ])
+        .env("HOME", temp.path())
         .env("CAPTURE", &capture)
         .env(
             "PATH",

@@ -4290,7 +4290,10 @@ fn slash_model_dropdown_click_selects_model_not_session_row() {
         text.contains("alpha-model")
             || text.contains("beta-model")
             || text.contains("Alpha")
-            || text.contains("Beta"),
+            || text.contains("Beta")
+            // Row 0 is always "Auto (SystemOne)": accepting it is still a
+            // model completion, not a session attach.
+            || text.contains("auto"),
         "dispatch should contain accepted model completion, got {text:?}"
     );
     assert!(

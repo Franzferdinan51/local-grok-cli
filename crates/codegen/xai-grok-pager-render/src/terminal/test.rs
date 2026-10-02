@@ -1804,7 +1804,8 @@ fn prefer_alt_enter_newline_modern_vte_inside_old_tmux() {
         tmux_version: Some("tmux 3.2a".to_owned()),
         ..Default::default()
     };
-    assert_eq!(ctx.kitty_skip_reason(), Some("vte"));
+    // Modern VTE is not the limiter here; the old tmux is.
+    assert_eq!(ctx.kitty_skip_reason(), Some("tmux_old"));
     assert!(!ctx.shift_enter_unavailable());
     assert!(ctx.prefer_alt_enter_newline());
 }
@@ -1817,7 +1818,8 @@ fn prefer_alt_enter_newline_modern_vte_inside_screen() {
         multiplexer: MultiplexerKind::Screen,
         ..Default::default()
     };
-    assert_eq!(ctx.kitty_skip_reason(), Some("vte"));
+    // Modern VTE is not the limiter here; screen is.
+    assert_eq!(ctx.kitty_skip_reason(), Some("screen"));
     assert!(!ctx.shift_enter_unavailable());
     assert!(ctx.prefer_alt_enter_newline());
 }

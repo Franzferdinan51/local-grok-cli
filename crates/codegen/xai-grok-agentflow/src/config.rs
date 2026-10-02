@@ -311,7 +311,7 @@ mod tests {
         assert_eq!(policy.max_steps, 42);
         assert_eq!(policy.subagents, crate::effort::SubagentAllowance::Never);
         // Untouched fields keep compiled defaults.
-        assert_eq!(policy.max_tool_calls, 250);
+        assert_eq!(policy.max_tool_calls, 1200);
     }
 
     #[test]
@@ -326,7 +326,7 @@ mod tests {
         // TOML provides steps; policy provides tool calls.
         let budgets = config.resolve_budgets(Some("heavy"), Some("xhigh"), &|_| None);
         assert_eq!(budgets.max_steps, Some(200));
-        assert_eq!(budgets.max_tool_calls, Some(250));
+        assert_eq!(budgets.max_tool_calls, Some(1200));
 
         // Env beats TOML.
         let get_env =

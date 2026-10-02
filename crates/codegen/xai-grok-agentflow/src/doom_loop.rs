@@ -93,8 +93,9 @@ pub fn is_doom_loop_disabled(get_env: EnvReader<'_>) -> bool {
 }
 
 /// Normalizes a string argument value: CRLF → LF, trailing whitespace per
-/// line, 3+ blank lines → 2, backslashes → forward slashes unless the
-/// string is a URI, lexical `.`/`..` collapse for path-like strings.
+/// line, 3+ consecutive newlines → 2, backslashes → forward slashes
+/// unless the string is a URI, lexical `.`/`..` collapse for path-like
+/// non-URI strings.
 pub fn normalize_doom_loop_string(raw: &str) -> String {
     let mut text = raw.replace("\r\n", "\n").replace('\r', "\n");
     text = text
@@ -102,13 +103,14 @@ pub fn normalize_doom_loop_string(raw: &str) -> String {
         .map(|line| line.trim_end())
         .collect::<Vec<_>>()
         .join("\n");
-    // Collapse 3+ blank lines into 2.
+    // Collapse 3+ consecutive newlines into 2 (blank runs are noise for
+    // loop detection, so any run canonicalizes to a single blank line).
     let mut collapsed = String::with_capacity(text.len());
     let mut blank_run = 0usize;
     for line in text.split('\n') {
         if line.trim().is_empty() {
             blank_run += 1;
-            if blank_run <= 2 {
+            if blank_run <= 1 {
                 collapsed.push('\n');
             }
         } else {
@@ -124,9 +126,9 @@ pub fn normalize_doom_loop_string(raw: &str) -> String {
 
     if !URI_SCHEME_RE.is_match(&normalized) {
         normalized = normalized.replace('\\', "/");
-    }
-    if is_path_like(&normalized) {
-        normalized = collapse_dot_segments(&normalized);
+        if is_path_like(&normalized) {
+            normalized = collapse_dot_segments(&normalized);
+        }
     }
     normalized
 }

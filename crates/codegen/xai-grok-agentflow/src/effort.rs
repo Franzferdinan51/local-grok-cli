@@ -124,61 +124,62 @@ pub struct EffortBehaviorPolicy {
     pub plan_then_execute_eligible: bool,
 }
 
-/// Ryan's raised defaults (the ZCode 3.25.0 policy table), kept only as
-/// fallbacks — every field is overridable via config or env.
+/// Roomy effort defaults: agentic coding loops burn a step per tool
+/// round-trip, so tight budgets abort long tasks before they converge.
+/// Every field stays overridable via config or env.
 pub fn default_policy(tier: EffortTier) -> EffortBehaviorPolicy {
     match tier {
         EffortTier::Low => EffortBehaviorPolicy {
             tier,
-            max_steps: 25,
-            max_tool_calls: 60,
+            max_steps: 60,
+            max_tool_calls: 150,
             subagents: SubagentAllowance::Never,
-            subagent_max_turns: 2,
-            read_breadth: 3,
+            subagent_max_turns: 8,
+            read_breadth: 5,
             verification_passes: 0,
             compaction_aggressiveness: 1.0,
             plan_then_execute_eligible: false,
         },
         EffortTier::Medium => EffortBehaviorPolicy {
             tier,
-            max_steps: 40,
-            max_tool_calls: 100,
+            max_steps: 120,
+            max_tool_calls: 300,
             subagents: SubagentAllowance::Conservative,
-            subagent_max_turns: 4,
-            read_breadth: 6,
+            subagent_max_turns: 16,
+            read_breadth: 10,
             verification_passes: 0,
             compaction_aggressiveness: 1.0,
             plan_then_execute_eligible: false,
         },
         EffortTier::High => EffortBehaviorPolicy {
             tier,
-            max_steps: 60,
-            max_tool_calls: 150,
+            max_steps: 250,
+            max_tool_calls: 600,
             subagents: SubagentAllowance::Conservative,
-            subagent_max_turns: 6,
-            read_breadth: 10,
+            subagent_max_turns: 32,
+            read_breadth: 15,
             verification_passes: 0,
             compaction_aggressiveness: 1.0,
             plan_then_execute_eligible: false,
         },
         EffortTier::XHigh => EffortBehaviorPolicy {
             tier,
-            max_steps: 90,
-            max_tool_calls: 250,
+            max_steps: 500,
+            max_tool_calls: 1200,
             subagents: SubagentAllowance::Parallel,
-            subagent_max_turns: 8,
-            read_breadth: 15,
+            subagent_max_turns: 48,
+            read_breadth: 25,
             verification_passes: 1,
             compaction_aggressiveness: 0.9,
             plan_then_execute_eligible: true,
         },
         EffortTier::Ultra => EffortBehaviorPolicy {
             tier,
-            max_steps: 120,
-            max_tool_calls: 400,
+            max_steps: 1000,
+            max_tool_calls: 2500,
             subagents: SubagentAllowance::Parallel,
-            subagent_max_turns: 12,
-            read_breadth: 25,
+            subagent_max_turns: 64,
+            read_breadth: 40,
             verification_passes: 1,
             compaction_aggressiveness: 0.85,
             plan_then_execute_eligible: true,
@@ -329,30 +330,30 @@ mod tests {
     }
 
     #[test]
-    fn default_table_matches_zcode_325_values() {
+    fn default_table_matches_roomy_values() {
         let low = default_policy(EffortTier::Low);
-        assert_eq!((low.max_steps, low.max_tool_calls), (25, 60));
+        assert_eq!((low.max_steps, low.max_tool_calls), (60, 150));
         assert_eq!(low.subagents, SubagentAllowance::Never);
         assert!(!low.plan_then_execute_eligible);
 
         let medium = default_policy(EffortTier::Medium);
-        assert_eq!((medium.max_steps, medium.max_tool_calls), (40, 100));
+        assert_eq!((medium.max_steps, medium.max_tool_calls), (120, 300));
         assert_eq!(medium.subagents, SubagentAllowance::Conservative);
 
         let high = default_policy(EffortTier::High);
-        assert_eq!((high.max_steps, high.max_tool_calls), (60, 150));
+        assert_eq!((high.max_steps, high.max_tool_calls), (250, 600));
 
         let xhigh = default_policy(EffortTier::XHigh);
-        assert_eq!((xhigh.max_steps, xhigh.max_tool_calls), (90, 250));
+        assert_eq!((xhigh.max_steps, xhigh.max_tool_calls), (500, 1200));
         assert_eq!(xhigh.subagents, SubagentAllowance::Parallel);
         assert_eq!(xhigh.verification_passes, 1);
         assert!((xhigh.compaction_aggressiveness - 0.9).abs() < f64::EPSILON);
         assert!(xhigh.plan_then_execute_eligible);
 
         let ultra = default_policy(EffortTier::Ultra);
-        assert_eq!((ultra.max_steps, ultra.max_tool_calls), (120, 400));
-        assert_eq!(ultra.subagent_max_turns, 12);
-        assert_eq!(ultra.read_breadth, 25);
+        assert_eq!((ultra.max_steps, ultra.max_tool_calls), (1000, 2500));
+        assert_eq!(ultra.subagent_max_turns, 64);
+        assert_eq!(ultra.read_breadth, 40);
         assert!((ultra.compaction_aggressiveness - 0.85).abs() < f64::EPSILON);
         assert!(ultra.plan_then_execute_eligible);
     }
@@ -373,7 +374,7 @@ mod tests {
         assert_eq!(policy.max_steps, 77); // env wins over TOML
         assert_eq!(policy.max_tool_calls, 4242); // TOML wins over default
         assert_eq!(policy.subagents, SubagentAllowance::Parallel); // env
-        assert_eq!(policy.subagent_max_turns, 6); // default untouched
+        assert_eq!(policy.subagent_max_turns, 32); // default untouched
     }
 
     #[test]

@@ -19,7 +19,7 @@ use crate::{EnvReader, is_env_disabled};
 pub const SUBAGENTS_ENV: &str = "GROK_LOCAL_SUBAGENTS";
 
 /// Fallback child turn budget when no effort policy is available (fail-open).
-pub const SUBAGENT_CHILD_TURNS_FALLBACK: u32 = 4;
+pub const SUBAGENT_CHILD_TURNS_FALLBACK: u32 = 16;
 
 /// True when a falsy env spelling disables subagent guidance.
 pub fn is_subagents_disabled(get_env: EnvReader<'_>) -> bool {

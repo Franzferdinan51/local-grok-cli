@@ -153,7 +153,14 @@ fn write_all_until_delivers_and_restores_flags() {
 
     assert!(write_all_until(fd, b"\x1b[c", far_deadline()));
 
-    assert_eq!(flags_before, file_status_flags(fd).expect("F_GETFL"));
+    // Compare only the bits F_SETFL controls: on macOS, F_GETFL on a
+    // socket also reflects kernel socket-state bits (0x10000 appears after
+    // I/O) that F_SETFL neither sets nor clears.
+    let setfl_mask = libc::O_APPEND | libc::O_NONBLOCK | libc::O_ASYNC | libc::O_FSYNC;
+    assert_eq!(
+        flags_before & setfl_mask,
+        file_status_flags(fd).expect("F_GETFL") & setfl_mask
+    );
     reader
         .set_read_timeout(Some(Duration::from_secs(2)))
         .expect("set read timeout");
