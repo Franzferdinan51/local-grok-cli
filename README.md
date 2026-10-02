@@ -109,6 +109,14 @@ creates, replaces, or redirects `grok`. Put `target/release` (or a copy of
 `~/.grok-local` (`%USERPROFILE%\.grok-local` on Windows), override with
 `$GROK_HOME`.
 
+`install.sh` also provisions local web search via
+`scripts/setup-searxng.sh` (idempotent — safe to re-run anytime): it
+ensures a SearXNG checkout at `~/searxng` (pinned to a verified commit),
+a venv at `~/searxng-env`, a working `~/.searxng/settings.yml`, and —
+with `--persist` — a launchd agent serving `http://127.0.0.1:8888`,
+exactly what the `web_search` tool expects. Override locations with
+`SEARXNG_SRC` / `SEARXNG_VENV` / `SEARXNG_SETTINGS`.
+
 On Windows PowerShell, install the built binary and add the user bin directory
 to `PATH` with:
 
@@ -236,19 +244,42 @@ entries to add, no shim to launch by hand. If the router is not running, the
 binary starts the installed shim itself (detached; the model is already in
 the HuggingFace cache, so cold start is seconds).
 
-The returned tier maps to a reasoning effort and loop cap
-(`edge`/`economy` → low / 4 turns, `balanced` → medium / 6, `heavy` →
-high / 10). Headless: applied only when `--reasoning-effort` / `--max-turns`
-were not passed explicitly. Interactive: the routed effort auto-tunes each
-turn unless you explicitly set one (then the router stands down); the routed
-turn cap applies unless `--max-turns` was passed. Route-driven MCP server
-suggestions are logged; actual pruning of the per-session MCP list (headless
-only) is opt-in and conservative (live router, ≥ 0.85 confidence, cheap tier
-only).
+The returned tier maps to a reasoning effort and loop cap. Caps are
+deliberately roomy — agentic loops burn a turn per tool round-trip, so
+tight caps abort long tasks:
+
+| Effort | Session turns | Agent steps / tool calls |
+|---|---|---|
+| off | 12 | — |
+| low | 25 | 60 / 150 |
+| medium | 50 | 120 / 300 |
+| high | 100 | 250 / 600 |
+| xhigh | 200 | 500 / 1200 |
+| ultra | 400 | 1000 / 2500 |
+
+Subagents get 8–64 turns by tier. Every budget stays overridable:
+`--max-turns` / `--reasoning-effort` on the CLI,
+`GROK_LOCAL_EFFORT_<TIER>_MAX_STEPS` /
+`GROK_LOCAL_EFFORT_<TIER>_MAX_TOOL_CALLS` env, or the
+`[agent_flow.effort.<tier>]` config table.
+
+Headless: the routed effort/cap apply only when `--reasoning-effort` /
+`--max-turns` were not passed explicitly. Interactive: the routed effort
+auto-tunes each turn unless you explicitly set one (then the router
+stands down); the routed turn cap applies unless `--max-turns` was
+passed. Route-driven MCP server suggestions are logged; actual pruning
+of the per-session MCP list (headless only) is opt-in and conservative
+(live router, ≥ 0.85 confidence, cheap tier only).
 
 Fail-open always: a router outage or error leaves the session exactly as if
 routing did not exist. One greppable `systemone: …` line on stderr proves
-what routing did (source, tier, effort, max_turns, confidence).
+what routing did (source, tier, effort, max_turns, confidence). Route-store
+failures are traced (never silent), and a sticky `router:down` suffix in
+the status line tells you at a glance when the router is unreachable.
+
+`/systemone` (slash command) prints live routing diagnostics: shim health,
+last route (tier/effort/confidence/model), and any recorded route error —
+the fastest way to check what the router is doing mid-session.
 
 Under `thinking=auto` the router picks the effort per task and may reach
 `xhigh`/`ultra` for heavy work; a pinned level (`/thinking high`,
@@ -275,7 +306,7 @@ config file, same precedence as the kill-switches above.
 unset means the shim default (`balanced`).
 
 The router is the upstream SystemOne shim
-(`https://github.com/Franzferdinan51/SystemOne`, 0.1.0+), installed to
+(`https://github.com/Franzferdinan51/SystemOne`, 0.2.0+), installed to
 `$SYSTEMONE_RELEASE_DIR` (else `~/systemone-release`) by
 `scripts/install.sh` and refreshed on every reinstall. It serves route,
 plan ranking (`POST /v1/systemone/rank-plans`), typed decisions
