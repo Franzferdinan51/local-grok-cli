@@ -1,7 +1,8 @@
 //! `/model` (alias `/m`): switch the model and optionally its reasoning effort.
 //! Chained autocomplete: after picking a reasoning-supported model, the trailing space re-opens the dropdown.
 //! Its first row, "(model only)", pins just the model and leaves thinking on its current `/thinking` setting;
-//! the `low|medium|high|xhigh` rows are the explicit combined spelling (`/model <name> <effort>`) that pins both selectors.
+//! the `low|medium|high|xhigh` rows are the explicit combined spelling (`/model <name> <effort>`) that pins both selectors;
+//! the trailing `auto` row pins the model and releases thinking to SystemOne (`/model <name> auto`).
 //! `/model auto` selects automatic model selection: SystemOne picks per task (advisory only — the loaded model is never switched or unloaded).
 
 use agent_client_protocol as acp;
@@ -23,7 +24,7 @@ impl SlashCommand for ModelCommand {
         name: "model",
         aliases: ["m"],
         description: "Switch the active model, or /model auto for SystemOne-picked models",
-        usage: "/model <name|auto> [effort]",
+        usage: "/model <name|auto> [effort|auto]",
         takes_args: true,
         args_required: true,
         session_scoped: true,
@@ -54,7 +55,7 @@ impl SlashCommand for ModelCommand {
         // Fresh effort menu: default to the "(model only)" row — picking a
         // model pins just the model. The effort rows stay available as the
         // explicit combined spelling (`/model <name> <effort>`).
-        Some(model_name.into())
+        Some(model_name)
     }
 
     fn run(&self, ctx: &mut CommandExecCtx, args: &str) -> CommandResult {
@@ -105,6 +106,17 @@ impl SlashCommand for ModelCommand {
                 .map(supports_reasoning_effort)
                 .unwrap_or(false)
         {
+            // `/model <name> auto`: pin the model, release thinking to the
+            // router (same as picking the model, then `/thinking auto`).
+            if token.eq_ignore_ascii_case("auto") {
+                persist_pinned();
+                if !SystemOneConfig::save_thinking(ThinkingMode::Auto) {
+                    tracing::warn!(
+                        "systemone: /model could not persist auto thinking; live switch still applied"
+                    );
+                }
+                return CommandResult::Action(Action::SetDefaultModel(id));
+            }
             return match ctx.models.resolve_effort_for_model(&id, token) {
                 Ok(effort) => {
                     // Named model + effort: pin the model AND pin the thinking
@@ -223,13 +235,15 @@ fn build_model_items(models: &ModelState) -> Vec<ArgItem> {
     items
 }
 
-/// Rows for the `/model` chained effort phase: a leading "(model only)" row
-/// plus one row per effort level. The model-only row is the default (row 0,
-/// sort key `'!'` beats the effort rows' `'a'`/`'b'`/…): accepting it pins
-/// just the model and leaves thinking on its own setting, so picking a
-/// reasoning model never silently pins thinking. The effort rows keep
-/// `insert_text` of `"ModelName high"` — the explicit combined spelling
-/// (`/model <name> <effort>`) that pins both selectors at once.
+/// Rows for the `/model` chained effort phase: a leading "(model only)" row,
+/// one row per effort level, and a trailing "auto" row. The model-only row
+/// is the default (row 0, sort key `'!'` beats the effort rows'
+/// `'a'`/`'b'`/…): accepting it pins just the model and leaves thinking on
+/// its own setting, so picking a reasoning model never silently pins
+/// thinking. The effort rows keep `insert_text` of `"ModelName high"` —
+/// the explicit combined spelling (`/model <name> <effort>`) that pins
+/// both selectors at once. The auto row (`"ModelName auto"`) pins the
+/// model and releases thinking to SystemOne.
 fn build_effort_items(models: &ModelState, model_id: &acp::ModelId) -> Vec<ArgItem> {
     let info = match models.available.get(model_id) {
         Some(info) => info,
@@ -237,7 +251,7 @@ fn build_effort_items(models: &ModelState, model_id: &acp::ModelId) -> Vec<ArgIt
     };
     let is_current_model = models.current.as_ref() == Some(model_id);
     let options = models.reasoning_effort_options_for(model_id);
-    let mut items = Vec::with_capacity(options.len() + 1);
+    let mut items = Vec::with_capacity(options.len() + 2);
     items.push(ArgItem {
         display: "(model only)".to_string(),
         match_text: format!("! {}", info.name),
@@ -251,6 +265,13 @@ fn build_effort_items(models: &ModelState, model_id: &acp::ModelId) -> Vec<ArgIt
         is_current_model,
         |option| effort_insert_text(&info.name, option),
     ));
+    let sort_prefix = char::from(b'a' + items.len().min(25) as u8);
+    items.push(ArgItem {
+        display: "auto".to_string(),
+        match_text: format!("{sort_prefix} auto"),
+        insert_text: format!("{} auto", info.name),
+        description: "Pin this model; let SystemOne pick the effort per task".to_string(),
+    });
     items
 }
 
@@ -387,11 +408,12 @@ mod tests {
         // The args query has a trailing space, so this is the effort phase.
         // Row 0 is "(model only)" (pins just the model, thinking untouched);
         // then the effort rows ordered xhigh to low (strongest first) per
-        // EFFORT_LEVELS.
+        // EFFORT_LEVELS; then the trailing "auto" row (pin model, release
+        // thinking to SystemOne).
         let items = cmd.suggest_args(&ctx, "Reasoning X ").unwrap();
-        assert_eq!(items.len(), 5);
-        let [model_only, a, b, c, d] = items.as_slice() else {
-            panic!("expected 5 items: {items:?}");
+        assert_eq!(items.len(), 6);
+        let [model_only, a, b, c, d, auto] = items.as_slice() else {
+            panic!("expected 6 items: {items:?}");
         };
         assert_eq!(model_only.display, "(model only)");
         assert_eq!(model_only.insert_text, "Reasoning X");
@@ -399,11 +421,14 @@ mod tests {
         assert_eq!(b.insert_text, "Reasoning X high");
         assert_eq!(c.insert_text, "Reasoning X medium");
         assert_eq!(d.insert_text, "Reasoning X low");
+        assert_eq!(auto.display, "auto");
+        assert_eq!(auto.insert_text, "Reasoning X auto");
         // Display is just the level so the user sees a clean column.
         assert_eq!(a.display, "xhigh");
         // match_text carries the sort-key prefix that forces the matcher's alphabetical tiebreak to render rows in EFFORT_LEVELS order
         assert!(a.match_text.starts_with("a "));
         assert!(d.match_text.starts_with("d "));
+        assert!(auto.match_text.ends_with(" auto"));
     }
 
     #[test]
@@ -463,7 +488,12 @@ mod tests {
         };
         // Still in effort phase; the matcher upstream narrows to the model-only row plus high and xhigh
         let items = cmd.suggest_args(&ctx, "Reasoning X h").unwrap();
-        assert_eq!(items.len(), 5);
+        assert_eq!(items.len(), 6);
+        assert!(
+            items
+                .last()
+                .is_some_and(|row| row.insert_text.ends_with(" auto"))
+        );
     }
 
     #[test]
@@ -512,6 +542,21 @@ mod tests {
                 assert_eq!(effort, Some(ReasoningEffort::Xhigh));
             }
             other => panic!("expected SwitchModel with effort, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_model_plus_auto_pins_model_and_releases_thinking() {
+        let mut state = ModelState::default();
+        let (id, info) = model_with_reasoning("reasoning-x", "Reasoning X");
+        state.available.insert(id, info);
+        let mut ctx = dummy_exec_ctx(&state);
+        let result = ModelCommand.run(&mut ctx, "Reasoning X auto");
+        match result {
+            CommandResult::Action(Action::SetDefaultModel(model_id)) => {
+                assert_eq!(model_id.0.as_ref(), "reasoning-x");
+            }
+            other => panic!("expected SetDefaultModel, got {other:?}"),
         }
     }
 

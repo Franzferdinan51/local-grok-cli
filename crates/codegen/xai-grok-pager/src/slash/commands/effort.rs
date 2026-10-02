@@ -2,6 +2,7 @@
 //!
 //! Thin wrapper over `Action::SwitchModel` with the session's current model id and the chosen effort (same wire path as `/model <name> <effort>`).
 //! Also pins the SystemOne thinking level persistently — `/effort` is the legacy spelling of `/thinking <level>`.
+//! `/effort auto` releases the pin: SystemOne picks the effort per task (same as `/thinking auto`).
 
 use crate::app::actions::Action;
 use crate::slash::command::{
@@ -15,9 +16,9 @@ pub struct EffortCommand;
 impl SlashCommand for EffortCommand {
     slash_meta! {
         name: "effort",
-        description: "Set reasoning effort for the current model",
+        description: "Set reasoning effort for the current model (or auto for SystemOne-picked)",
         // Levels are model-specific; empty-args and UnknownToken errors list the active model's offered option ids instead of a hardcoded set.
-        usage: "/effort <level>",
+        usage: "/effort <level|auto>",
         takes_args: true,
         args_required: true,
         session_scoped: true,
@@ -26,19 +27,50 @@ impl SlashCommand for EffortCommand {
 
     fn suggest_args(&self, ctx: &AppCtx, _args_query: &str) -> Option<Vec<ArgItem>> {
         let options = ctx.models.reasoning_effort_options();
-        if options.is_empty() {
-            return None;
-        }
-        Some(build_effort_arg_items(
-            &options,
-            ctx.models.reasoning_effort,
-            true,
-            |option| option.id.clone(),
-        ))
+        let mut items =
+            build_effort_arg_items(&options, ctx.models.reasoning_effort, true, |option| {
+                option.id.clone()
+            });
+        // `auto` is model-independent (it never pins an effort), so it is
+        // offered even when the model reports no reasoning options. Last,
+        // matching `/thinking`'s choice order.
+        let thinking_auto = matches!(
+            xai_grok_systemone::SystemOneConfig::load().thinking,
+            xai_grok_systemone::ThinkingMode::Auto
+        );
+        let sort_prefix = char::from(b'a' + items.len().min(25) as u8);
+        items.push(ArgItem {
+            display: if thinking_auto {
+                "auto (active)".to_string()
+            } else {
+                "auto".to_string()
+            },
+            match_text: format!("{sort_prefix} auto"),
+            insert_text: "auto".to_string(),
+            description: "Let SystemOne pick per task (may use xhigh/ultra)".to_string(),
+        });
+        Some(items)
     }
 
     fn run(&self, ctx: &mut CommandExecCtx, args: &str) -> CommandResult {
         let trimmed = args.trim();
+
+        // `/effort auto` releases the thinking pin (same as `/thinking
+        // auto`). It touches no model, so it works with no active model.
+        if trimmed.eq_ignore_ascii_case("auto") {
+            let cfg = xai_grok_systemone::SystemOneConfig::load();
+            if !xai_grok_systemone::SystemOneConfig::save_thinking(
+                xai_grok_systemone::ThinkingMode::Auto,
+            ) {
+                tracing::warn!("systemone: /effort auto could not persist; applying live only");
+            }
+            return CommandResult::Message(format!(
+                "Thinking: auto — SystemOne picks the reasoning level per task \
+                 (may use xhigh/ultra when warranted). Model selection stays {}.",
+                cfg.model_selection.as_str(),
+            ));
+        }
+
         let Some(model_id) = ctx.models.current.clone() else {
             return CommandResult::Error("No active model".into());
         };
@@ -56,9 +88,9 @@ impl SlashCommand for EffortCommand {
                 .map(|e| format!(" (current: {e})"))
                 .unwrap_or_default();
             let levels = if offered.is_empty() {
-                "<level>".to_string()
+                "auto".to_string()
             } else {
-                offered.join("|")
+                format!("{}|auto", offered.join("|"))
             };
             return CommandResult::Error(format!("Usage: /effort <{levels}>{current}"));
         }
@@ -310,7 +342,9 @@ mod tests {
     }
 
     #[test]
-    fn suggest_args_none_without_current_or_support() {
+    fn suggest_args_offers_auto_without_current_or_support() {
+        // `auto` is model-independent (it never pins an effort), so it is
+        // the only row even when the model reports no reasoning options.
         let cmd = EffortCommand;
         let empty = ModelState::default();
         let ctx = AppCtx {
@@ -325,7 +359,9 @@ mod tests {
             screen_mode: crate::app::ScreenMode::Fullscreen,
             current_title: None,
         };
-        assert!(cmd.suggest_args(&ctx, "").is_none());
+        let items = cmd.suggest_args(&ctx, "").unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].insert_text, "auto");
 
         let mut plain = ModelState::default();
         let (id, info) = plain_model("grok-4.5", "Grok 4.5");
@@ -343,7 +379,9 @@ mod tests {
             screen_mode: crate::app::ScreenMode::Fullscreen,
             current_title: None,
         };
-        assert!(cmd.suggest_args(&ctx, "").is_none());
+        let items = cmd.suggest_args(&ctx, "").unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].insert_text, "auto");
     }
 
     #[test]
@@ -368,16 +406,18 @@ mod tests {
             current_title: None,
         };
         let items = cmd.suggest_args(&ctx, "").unwrap();
-        assert_eq!(items.len(), EFFORT_LEVELS.len());
-        let [a, b, c, d] = items.as_slice() else {
-            panic!("expected 4 items: {items:?}");
+        assert_eq!(items.len(), EFFORT_LEVELS.len() + 1);
+        let [a, b, c, d, auto] = items.as_slice() else {
+            panic!("expected 4 levels + auto: {items:?}");
         };
         assert_eq!(a.insert_text, "xhigh");
         assert_eq!(b.insert_text, "high");
         assert_eq!(b.display, "high (active)");
         assert_eq!(c.insert_text, "medium");
         assert_eq!(d.insert_text, "low");
+        assert_eq!(auto.insert_text, "auto");
         assert!(a.match_text.starts_with("a "));
         assert!(d.match_text.starts_with("d "));
+        assert!(auto.match_text.starts_with("e "));
     }
 }
