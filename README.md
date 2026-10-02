@@ -245,7 +245,7 @@ interactive/ACP per-turn prompts alike):
 | Decision | Endpoint | How grok-local uses it |
 |---|---|---|
 | Effort tier + turn budget | `route` | reasoning effort + session turn cap per task |
-| Model | `route` (`ranked_models`) | best-value pick becomes the session model under `model=auto` (catalog-resolved, fail-open) |
+| Model | `route` (`ranked_models`) | best-value pick becomes the session model under `model=auto` (catalog-resolved, fail-open; `SYSTEMONE_PREFER_MODELS=id,…` on the shim sorts your ids first) |
 | Tool shortlist | `route` (`ranked_tools`) | shim-ranked ids are keep-signals; uncertain routes force the full list ("no tool pruning") |
 | Which plan to run | `rank-plans` | plan-then-execute gate ranks candidate plans |
 | Typed questions | `decide` | `grok-local decide` (`choice`/`noul`/`score`) |
