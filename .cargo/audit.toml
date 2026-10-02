@@ -1,0 +1,9 @@
+[advisories]
+# RUSTSEC-2023-0071 (rsa Marvin timing sidechannel): no fixed upgrade
+# exists upstream. grok-local reaches rsa only transitively via
+# gcloud-auth -> jsonwebtoken default features; our own JWT usage is
+# HS256 (HMAC), and jsonwebtoken's RSA path here is public-key
+# verification. Marvin needs attacker-timed RSA private-key
+# decryptions, which this tree never performs. Revisit if RSA signing
+# is ever introduced. Accepted 2026-10-02.
+ignore = ["RUSTSEC-2023-0071"]
