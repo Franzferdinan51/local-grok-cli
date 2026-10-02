@@ -270,6 +270,21 @@ The selectors are also settable via env: `GROK_LOCAL_SYSTEMONE_THINKING`
 (`off|low|medium|high|xhigh|ultra|auto`) and
 `GROK_LOCAL_SYSTEMONE_MODEL_SELECTION` (`auto|pinned`) — env wins over the
 config file, same precedence as the kill-switches above.
+`GROK_LOCAL_SYSTEMONE_COST_BIAS` (`economy|balanced|quality`, or the
+`cost_bias` config key) steers the router toward cheaper or stronger tiers;
+unset means the shim default (`balanced`).
+
+The router is the upstream SystemOne shim
+(`https://github.com/Franzferdinan51/SystemOne`, 0.1.0+), installed to
+`$SYSTEMONE_RELEASE_DIR` (else `~/systemone-release`) by
+`scripts/install.sh` and refreshed on every reinstall. It serves route,
+plan ranking (`POST /v1/systemone/rank-plans`), typed decisions
+(`POST /v1/systemone/decide`), the permutation probe
+(`POST /v1/systemone/permute`), and the Jev/SGLang/JEV decision dialects.
+Its judge engine follows `SYSTEMONE_ENGINE`
+(`auto|local|sglang|jevk5|onnx|jev|kev`); set `JEV_URL`,
+`SGLANG_BASE_URL`, `JEVK5_BASE_URL`, or `KEV_BASE_URL` to judge through a
+remote model instead of local weights.
 
 ### Decision engine (SystemOne)
 

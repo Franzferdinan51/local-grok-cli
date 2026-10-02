@@ -105,6 +105,9 @@ SPEED_DEFAULTS = {
         "http://127.0.0.1:8765/v1/systemone/route",
     ],
     "systemone_timeout": 3,
+    # Cost bias for /v1/systemone/route (economy|balanced|quality).
+    # None omits the key and the shim defaults to balanced.
+    "systemone_cost_bias": None,
     # Fail-open effort matches grok-local's own default_reasoning_effort.
     "default_effort": "high",
     "permission_mode_default": "auto",
@@ -517,7 +520,9 @@ def _rank_plans(task_desc, plans):
                                          headers={"Content-Type": "application/json"})
             with urllib.request.urlopen(req, timeout=cfg.get("systemone_timeout", 3)) as r:
                 payload = json.loads(r.read().decode("utf-8"))
-            ranked = payload.get("rankings") or payload.get("ranked_plans") or []
+            ranked = (payload.get("ranking")
+                      or payload.get("rankings")
+                      or payload.get("ranked_plans") or [])
             by_id = {str(r.get("id")): r for r in ranked
                      if isinstance(r, dict) and r.get("id") is not None}
             rankings = []
@@ -578,8 +583,12 @@ def systemone_route(task_desc, kind="prompt", session_id=None):
         decision["local_model"] = decision["loaded_model"] or cfg.get("planner_model")
         _record_route_decision(decision, kind)
         return _cache_route(session_id, decision)
-    body = json.dumps({"task": str(task_desc)[:500], "kind": kind,
-                       "client": NAME}).encode()
+    route_body = {"task": str(task_desc)[:500], "kind": kind,
+                  "client": NAME}
+    bias = str(cfg.get("systemone_cost_bias") or "").strip().lower()
+    if bias in ("economy", "balanced", "quality"):
+        route_body["cost_bias"] = bias
+    body = json.dumps(route_body).encode()
     last_err = None
     for url in cfg.get("systemone_urls", []):
         try:

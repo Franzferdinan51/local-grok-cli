@@ -84,6 +84,22 @@ proceed with zero user-visible breakage. This is tested, not just documented.
 | `GROK_LOCAL_SYSTEMONE_PRUNE=1` | Opt in to conservative MCP pruning |
 | `GROK_LOCAL_SYSTEMONE_URLS=…` | Comma-separated router URL override |
 | `GROK_LOCAL_SYSTEMONE_TIMEOUT_SECS=…` | Router HTTP timeout override |
+| `GROK_LOCAL_SYSTEMONE_COST_BIAS=…` | Route cost bias (`economy\|balanced\|quality`); invalid/blank = shim default |
+
+The router itself is the upstream SystemOne shim
+(`https://github.com/Franzferdinan51/SystemOne`, 0.1.0+), cloned to
+`$SYSTEMONE_RELEASE_DIR` (else `~/systemone-release`) by `scripts/install.sh`
+and refreshed (`git pull --ff-only`) on every reinstall. The shim serves
+`POST /v1/systemone/route`, `/v1/systemone/rank-plans`,
+`/v1/systemone/decide`, `/v1/systemone/permute`, the `POST /v1/systemone`
+Jev dialect, `POST /v1/decisions` (SGLang dialect), `POST /v1/decide`
+(JEV dialect), plus `GET /healthz`, `/metrics`, `/openapi.json`. Its judge
+engine is chosen by `SYSTEMONE_ENGINE`
+(`auto|local|sglang|jevk5|onnx|jev|kev`, default `auto`); remote engines are
+configured with `JEV_URL` / `SGLANG_BASE_URL` / `JEVK5_BASE_URL` /
+`KEV_BASE_URL` (inherited from this process's environment when the shim is
+auto-started). The `:8079` decision sidecar is decide-only and is never a
+route fallback.
 
 `~/.grok-local/config.toml` `[systemone]` section:
 
@@ -97,6 +113,7 @@ auto_start_shim = true
 shim_port = 8765
 prune_mcp_servers = false # opt-in only
 prune_min_confidence = 0.85
+cost_bias = "balanced"    # optional: economy|balanced|quality
 ```
 
 Env vars always win over the file.

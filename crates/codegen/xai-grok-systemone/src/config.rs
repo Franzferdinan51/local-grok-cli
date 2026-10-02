@@ -36,6 +36,9 @@ pub const ENV_THINKING: &str = "GROK_LOCAL_SYSTEMONE_THINKING";
 /// Override the model selection (`auto|pinned`). Same precedence as
 /// [`ENV_THINKING`].
 pub const ENV_MODEL_SELECTION: &str = "GROK_LOCAL_SYSTEMONE_MODEL_SELECTION";
+/// Cost bias sent on route requests (`economy|balanced|quality`).
+/// Unset/blank/invalid means "let the shim default" (`balanced`).
+pub const ENV_COST_BIAS: &str = "GROK_LOCAL_SYSTEMONE_COST_BIAS";
 /// `0`/`false`/`off`/`no` (case-insensitive) disables the Jeff-1 second
 /// decision head: the `:8079` fallback endpoint is dropped and routing is
 /// GLiClass-only. `1`/`true`/`on`/`yes` (or unset) keeps it on.
@@ -79,6 +82,10 @@ pub struct SystemOneConfig {
     /// endpoint is dropped (unless `urls` were explicitly customized) and
     /// routing is GLiClass-only. Env: `SYSTEMONE_JEFF1`.
     pub jeff1_enabled: bool,
+    /// Cost bias for `/v1/systemone/route` (`economy|balanced|quality`).
+    /// `None` omits the key and the shim defaults to `balanced`.
+    /// Env: `GROK_LOCAL_SYSTEMONE_COST_BIAS`; config file: `cost_bias`.
+    pub cost_bias: Option<String>,
 }
 
 impl Default for SystemOneConfig {
@@ -96,7 +103,16 @@ impl Default for SystemOneConfig {
             thinking: ThinkingMode::Auto,
             model_selection: ModelSelection::Pinned,
             jeff1_enabled: true,
+            cost_bias: None,
         }
+    }
+}
+
+/// Normalize a cost-bias value: lowercase `economy|balanced|quality`, else `None`.
+pub fn normalize_cost_bias(raw: &str) -> Option<String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "economy" | "balanced" | "quality" => Some(raw.trim().to_ascii_lowercase()),
+        _ => None,
     }
 }
 
@@ -260,6 +276,12 @@ impl SystemOneConfig {
         if let Some(v) = get("jeff1_enabled").and_then(toml::Value::as_bool) {
             self.jeff1_enabled = v;
         }
+        if let Some(bias) = get("cost_bias")
+            .and_then(toml::Value::as_str)
+            .and_then(normalize_cost_bias)
+        {
+            self.cost_bias = Some(bias);
+        }
     }
 
     fn apply_env(&mut self) {
@@ -311,6 +333,11 @@ impl SystemOneConfig {
         if let Some(v) = std::env::var(ENV_JEFF1).ok().and_then(|s| parse_bool(&s)) {
             self.jeff1_enabled = v;
         }
+        if let Ok(raw) = std::env::var(ENV_COST_BIAS)
+            && let Some(bias) = normalize_cost_bias(&raw)
+        {
+            self.cost_bias = Some(bias);
+        }
     }
 }
 
@@ -339,6 +366,7 @@ mod tests {
             ENV_THINKING,
             ENV_MODEL_SELECTION,
             ENV_JEFF1,
+            ENV_COST_BIAS,
         ] {
             unsafe { std::env::remove_var(key) };
         }
@@ -385,6 +413,33 @@ mod tests {
         assert!(!cfg.jeff1_enabled);
         assert_eq!(cfg.urls.len(), 1);
         assert!(cfg.urls[0].contains(":8765"));
+        scrub_speed_env();
+    }
+
+    #[test]
+    fn cost_bias_env_and_file_parse() {
+        assert_eq!(normalize_cost_bias("economy"), Some("economy".into()));
+        assert_eq!(normalize_cost_bias(" Quality "), Some("quality".into()));
+        assert_eq!(normalize_cost_bias("turbo"), None);
+        assert_eq!(normalize_cost_bias(""), None);
+
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[systemone]\ncost_bias = \"economy\"\n",
+        )
+        .unwrap();
+        scrub_speed_env();
+        let cfg = SystemOneConfig::load_from(dir.path());
+        assert_eq!(cfg.cost_bias.as_deref(), Some("economy"));
+        // Env wins over the file; invalid env keeps the file value.
+        unsafe { std::env::set_var(ENV_COST_BIAS, "quality") };
+        let cfg = SystemOneConfig::load_from(dir.path());
+        assert_eq!(cfg.cost_bias.as_deref(), Some("quality"));
+        unsafe { std::env::set_var(ENV_COST_BIAS, "turbo") };
+        let cfg = SystemOneConfig::load_from(dir.path());
+        assert_eq!(cfg.cost_bias.as_deref(), Some("economy"));
         scrub_speed_env();
     }
 

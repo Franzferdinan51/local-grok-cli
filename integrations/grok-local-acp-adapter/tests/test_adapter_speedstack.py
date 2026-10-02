@@ -145,6 +145,28 @@ class SpeedStackTest(unittest.TestCase):
         return mock.patch("urllib.request.urlopen",
                           return_value=FakeResp({"route": route}))
 
+    def test_route_body_cost_bias_opt_in(self):
+        import json as _json
+        seen = {}
+
+        def capture(req, timeout=None):
+            seen["body"] = _json.loads(req.data.decode())
+            return FakeResp({"route": {"tier": "economy"}})
+
+        with mock.patch("urllib.request.urlopen", side_effect=capture):
+            mod.systemone_route("do a thing")
+        self.assertNotIn("cost_bias", seen["body"])
+
+        mod._speed_config["systemone_cost_bias"] = "QUALITY"
+        with mock.patch("urllib.request.urlopen", side_effect=capture):
+            mod.systemone_route("do a thing")
+        self.assertEqual(seen["body"]["cost_bias"], "quality")
+
+        mod._speed_config["systemone_cost_bias"] = "turbo"
+        with mock.patch("urllib.request.urlopen", side_effect=capture):
+            mod.systemone_route("do a thing")
+        self.assertNotIn("cost_bias", seen["body"])
+
     def test_shim_effort_and_labels_consumed(self):
         with self._shim({"tier": "economy", "effort": "high",
                          "task_labels": ["git", "ci"],
@@ -392,13 +414,24 @@ class SpeedStackTest(unittest.TestCase):
 
     def test_rank_plans_picks_highest_score(self):
         plans = [{"id": "a", "text": "plan a"}, {"id": "b", "text": "plan b"}]
-        payload = {"rankings": [{"id": "a", "score": 0.4, "p_success": 0.5},
-                                {"id": "b", "score": 0.8, "p_success": 0.9}]}
+        payload = {"ranking": [{"id": "a", "score": 0.4, "p_success": 0.5},
+                               {"id": "b", "score": 0.8, "p_success": 0.9}]}
         with mock.patch("urllib.request.urlopen", return_value=FakeResp(payload)):
             winner, rankings = mod._rank_plans("task", plans)
         self.assertEqual(winner, 1)
         self.assertEqual(rankings[1]["score"], 0.8)
         self.assertEqual(rankings[1]["p_success"], 0.9)
+
+    def test_rank_plans_legacy_keys_fallback(self):
+        plans = [{"id": "a", "text": "plan a"}, {"id": "b", "text": "plan b"}]
+        for key in ("rankings", "ranked_plans"):
+            payload = {key: [{"id": "a", "score": 0.4},
+                             {"id": "b", "score": 0.8}]}
+            with mock.patch("urllib.request.urlopen",
+                            return_value=FakeResp(payload)):
+                winner, rankings = mod._rank_plans("task", plans)
+            self.assertEqual(winner, 1, key)
+            self.assertEqual(rankings[1]["score"], 0.8, key)
 
     def test_rank_plans_fail_open_shim_down(self):
         import urllib.error

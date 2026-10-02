@@ -32,6 +32,13 @@ if [[ ! -f "$systemone_dir/systemone/shim.py" ]]; then
   else
     echo "warning: git not found; skipping SystemOne setup (routing will fail open)" >&2
   fi
+elif [[ -d "$systemone_dir/.git" ]] && command -v git >/dev/null 2>&1; then
+  # Refresh an existing checkout so reinstalls pick up new shim endpoints
+  # (rank-plans/decide/permute), engines, and wire fixes. Fast-forward only:
+  # local edits or a diverged history keep the working tree untouched.
+  echo "Refreshing SystemOne router package in $systemone_dir ..."
+  git -C "$systemone_dir" pull --ff-only --quiet 2>/dev/null \
+    || echo "warning: SystemOne refresh skipped (local edits or offline); keeping the installed copy" >&2
 fi
 if [[ -f "$systemone_dir/systemone/shim.py" ]]; then
   echo "SystemOne router package present at $systemone_dir"

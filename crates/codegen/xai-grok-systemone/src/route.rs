@@ -532,12 +532,7 @@ pub async fn route_for_task(task: &str, kind: &str, cfg: &SystemOneConfig) -> Ro
         crate::records::record_route_decision(&decision, kind);
         return decision;
     }
-    let task_snippet: String = task.chars().take(500).collect();
-    let body = serde_json::json!({
-        "task": task_snippet,
-        "kind": kind,
-        "client": "grok-local",
-    });
+    let body = route_request_body(task, kind, cfg.cost_bias.as_deref());
 
     // Localhost-only router client: the grok TLS policy is for remote hosts.
     #[allow(clippy::disallowed_methods)]
@@ -589,6 +584,25 @@ pub async fn route_for_task(task: &str, kind: &str, cfg: &SystemOneConfig) -> Ro
         .map(|e| format!("router unreachable ({e}); using defaults"));
     crate::records::record_route_decision(&decision, kind);
     decision
+}
+
+/// Build the `/v1/systemone/route` request body (pure, unit-tested).
+///
+/// `{task (non-empty, 500 chars), kind, client}` plus `cost_bias` when the
+/// caller configured one (`economy|balanced|quality`; anything else is
+/// dropped so the shim default applies). Extra keys are ignored by old and
+/// new shims alike, so this shape works against every shim version.
+pub fn route_request_body(task: &str, kind: &str, cost_bias: Option<&str>) -> serde_json::Value {
+    let task_snippet: String = task.chars().take(500).collect();
+    let mut body = serde_json::json!({
+        "task": task_snippet,
+        "kind": kind,
+        "client": "grok-local",
+    });
+    if let Some(bias) = cost_bias.and_then(crate::config::normalize_cost_bias) {
+        body["cost_bias"] = serde_json::Value::String(bias);
+    }
+    body
 }
 
 /// Fold a `/v1/systemone/route` payload into a decision. Never panics:
@@ -844,6 +858,82 @@ fn parse_plan_ranking(payload: &serde_json::Value) -> Option<Vec<PlanRanking>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn route_request_body_shape_and_cost_bias() {
+        let plain = route_request_body("do a thing", "prompt", None);
+        assert_eq!(plain["task"], "do a thing");
+        assert_eq!(plain["kind"], "prompt");
+        assert_eq!(plain["client"], "grok-local");
+        assert!(plain.get("cost_bias").is_none());
+
+        let biased = route_request_body("x", "turn", Some("QUALITY"));
+        assert_eq!(biased["cost_bias"], "quality");
+
+        // Invalid bias is dropped (shim default applies), task truncated.
+        let bad = route_request_body(&"y".repeat(600), "turn", Some("turbo"));
+        assert!(bad.get("cost_bias").is_none());
+        assert_eq!(bad["task"].as_str().unwrap().chars().count(), 500);
+    }
+
+    /// Serve one modern-shim `/v1/systemone/route` response on loopback,
+    /// capturing the request body. No extra deps: raw `tokio::net` HTTP.
+    async fn serve_one_route(
+        seen: std::sync::Arc<tokio::sync::Mutex<Option<serde_json::Value>>>,
+        payload: serde_json::Value,
+    ) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
+        let url = format!(
+            "http://127.0.0.1:{}/v1/systemone/route",
+            listener.local_addr().unwrap().port()
+        );
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 65536];
+            let n = sock.read(&mut buf).await.unwrap();
+            let text = String::from_utf8_lossy(&buf[..n]).into_owned();
+            if let Some(body) = text.split("\r\n\r\n").nth(1) {
+                *seen.lock().await =
+                    serde_json::from_str(body.trim_end_matches('\0')).ok();
+            }
+            let body = serde_json::to_string(&payload).unwrap();
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            sock.write_all(resp.as_bytes()).await.unwrap();
+        });
+        url
+    }
+
+    #[tokio::test]
+    async fn route_round_trip_loopback_sends_cost_bias() {
+        let seen = std::sync::Arc::new(tokio::sync::Mutex::new(None));
+        let url = serve_one_route(
+            seen.clone(),
+            serde_json::json!({
+                "route": {"tier": "economy", "effort": "low",
+                          "confidence": 0.9, "task_labels": ["db"]},
+            }),
+        )
+        .await;
+        let cfg = SystemOneConfig {
+            urls: vec![url],
+            cost_bias: Some("economy".to_string()),
+            ..SystemOneConfig::default()
+        };
+        let d = route_for_task("migrate the db", "execute", &cfg).await;
+        assert_eq!(d.source, RouteSource::SystemOne);
+        assert_eq!(d.tier, Some(Tier::Economy));
+        assert_eq!(d.task_labels, vec!["db".to_string()]);
+        let body = seen.lock().await.clone().unwrap();
+        assert_eq!(body["task"], "migrate the db");
+        assert_eq!(body["cost_bias"], "economy");
+    }
 
     #[test]
     fn tier_effort_mapping_mirrors_adapter() {
@@ -1246,7 +1336,10 @@ mod tests {
         assert_eq!(d.tier, Some(Tier::Heavy));
         let line = d.evidence_line(RouterStatus::AlreadyRunning);
         assert!(line.contains("second_opinion=balanced:disagree"));
-        assert!(!line.to_lowercase().contains("jeff-1"), "never label it Jeff-1");
+        assert!(
+            !line.to_lowercase().contains("jeff-1"),
+            "never label it Jeff-1"
+        );
     }
 
     #[test]
