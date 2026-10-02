@@ -15,6 +15,12 @@ fi
 
 mkdir -p "$install_dir"
 install -m 755 "$binary" "$install_dir/grok-local"
+# macOS Gatekeeper kills unsigned binaries copied over a previously signed
+# install (Killed: 9 with identical bytes). Ad-hoc sign so the installed
+# copy always launches; harmless on other platforms (codesign absent).
+if [[ "$(uname -s)" == "Darwin" ]] && command -v codesign >/dev/null 2>&1; then
+  codesign --force --sign - "$install_dir/grok-local" >/dev/null 2>&1 || true
+fi
 
 echo "Installed grok-local to $install_dir/grok-local"
 echo "The official 'grok' command was not changed."
