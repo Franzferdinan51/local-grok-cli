@@ -58,3 +58,25 @@ if [[ -f "$systemone_dir/systemone/shim.py" ]]; then
 else
   echo "warning: SystemOne router package not found; routing will fail open at runtime" >&2
 fi
+
+# --- Local-first web search (SearXNG) ----------------------------------------
+# The web_search tool expects SearXNG on http://127.0.0.1:8888. Provision it
+# idempotently (venv + pinned source + settings + health check); with
+# GROK_LOCAL_SEARXNG_PERSIST=1 also install the macOS LaunchAgent so search
+# starts at login. Fail-open: search degrades, install succeeds.
+if [[ -x "$repo_root/scripts/setup-searxng.sh" ]]; then
+  echo "Provisioning local SearXNG search ..."
+  # NOTE: no bash arrays here — macOS /bin/bash is 3.2 and an empty array
+  # under `set -u` is a fatal "unbound variable".
+  if [[ "${GROK_LOCAL_SEARXNG_PERSIST:-0}" == "1" ]]; then
+    "$repo_root/scripts/setup-searxng.sh" --persist 2>&1 \
+      | sed 's/^/  [searxng] /' \
+      || echo "warning: SearXNG setup had issues; web_search may be degraded (re-run scripts/setup-searxng.sh)" >&2
+  else
+    "$repo_root/scripts/setup-searxng.sh" 2>&1 \
+      | sed 's/^/  [searxng] /' \
+      || echo "warning: SearXNG setup had issues; web_search may be degraded (re-run scripts/setup-searxng.sh)" >&2
+  fi
+else
+  echo "warning: scripts/setup-searxng.sh missing; skipping search setup" >&2
+fi

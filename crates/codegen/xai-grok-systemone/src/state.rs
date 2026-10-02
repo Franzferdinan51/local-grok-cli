@@ -58,6 +58,11 @@ pub struct LastRoute {
     /// Why pruning didn't engage, if it didn't (e.g. `"disabled(uncertain)"`).
     #[serde(default)]
     pub prune_note: Option<String>,
+    /// Fail-open reason when the router did not answer (None on success).
+    /// Sticky until the next route overwrites it; the TUI shows
+    /// `router:down` while set so silent fail-open stays visible.
+    #[serde(default)]
+    pub route_error: Option<String>,
 }
 
 impl LastRoute {
@@ -93,15 +98,31 @@ impl LastRoute {
                 .collect(),
             uncertain: decision.uncertain == Some(true),
             prune_note: decision.prune_note.clone(),
+            route_error: decision.error.clone(),
         }
     }
 
-    /// Persist to the state file. Fail-open: errors are swallowed.
+    /// Persist to the state file. Fail-open: errors are traced, never raised.
     pub fn store(&self) {
         let path = state_path();
-        if let Ok(text) = serde_json::to_string(self) {
-            let _ = std::fs::write(path, text);
+        match serde_json::to_string(self) {
+            Ok(text) => {
+                if let Err(err) = std::fs::write(&path, text) {
+                    tracing::warn!(
+                        path = %path.display(), %err,
+                        "systemone: last-route state not written (TUI will show stale thinking)"
+                    );
+                }
+            }
+            Err(err) => {
+                tracing::warn!(%err, "systemone: last-route state not serialized");
+            }
         }
+    }
+
+    /// Path of the state file (for diagnostics).
+    pub fn state_file_path() -> PathBuf {
+        state_path()
     }
 
     /// Read the state file. Returns `None` when missing or corrupt.
@@ -167,6 +188,29 @@ mod tests {
         // Round-trip through JSON.
         let back: LastRoute = serde_json::from_str(&serde_json::to_string(&lr).unwrap()).unwrap();
         assert_eq!(back.model_ranking.len(), 2);
+    }
+
+    /// The fail-open reason rides along (sticky `router:down` in the TUI)
+    /// and old state files without it still deserialize.
+    #[test]
+    fn capture_carries_route_error() {
+        let d = RouteDecision::fail_open(
+            &SystemOneConfig::default(),
+            Some("router unreachable".to_string()),
+        );
+        let lr = LastRoute::capture(
+            &d,
+            ThinkingMode::Auto,
+            Effort::High,
+            ModelSelection::Pinned,
+            None,
+        );
+        assert_eq!(lr.route_error.as_deref(), Some("router unreachable"));
+        let back: LastRoute =
+            serde_json::from_str(&serde_json::to_string(&lr).unwrap()).unwrap();
+        assert_eq!(back.route_error.as_deref(), Some("router unreachable"));
+        let old: LastRoute = serde_json::from_str(r#"{"ts":1,"tier":"balanced","routed_effort":"medium","thinking_applied":"medium","thinking_mode":"auto","model_selection":"pinned","model_advisory":null,"confidence":null,"source":"fail-open"}"#).unwrap();
+        assert!(old.route_error.is_none());
     }
 
     /// State files written by older builds (without the new fields) still

@@ -26,6 +26,8 @@ struct Cache {
     last_model_ranking: Vec<String>,
     /// Decider-backed second opinion (tier, agreed?) on the last routed turn.
     last_second_opinion: Option<(String, bool)>,
+    /// Fail-open reason when the router did not answer (sticky to next route).
+    last_route_error: Option<String>,
 }
 
 static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
@@ -54,7 +56,45 @@ fn refresh_locked(guard: &mut Cache) {
             .as_ref()
             .map(|op| (op.tier.clone(), op.agree))
     });
+    guard.last_route_error = last.as_ref().and_then(|r| r.route_error.clone());
     guard.refreshed_at = Some(Instant::now());
+}
+
+/// Pure suffix renderer (split out for tests: no clock, no files).
+fn render_suffixes(cache: &Cache) -> String {
+    if !cache.active {
+        return String::new();
+    }
+    let mut parts = Vec::with_capacity(4);
+    let think = match cache.thinking {
+        ThinkingMode::Auto => match &cache.last_thinking_applied {
+            Some(applied) => format!("auto→{applied}"),
+            None => "auto".to_string(),
+        },
+        ThinkingMode::Fixed(effort) => effort.as_str().to_string(),
+    };
+    parts.push(format!("think:{think}"));
+    if cache.model_selection == ModelSelection::Auto {
+        // What inference actually ran with first, then fallbacks.
+        let model = match &cache.last_model_selected {
+            Some(selected) => format!("auto→{selected}"),
+            None => match cache.last_model_ranking.first() {
+                Some(top) => format!("auto→{top}"),
+                None => match &cache.last_model_advisory {
+                    Some(advisory) => format!("auto→{advisory}"),
+                    None => "auto".to_string(),
+                },
+            },
+        };
+        parts.push(format!("model:{model}"));
+    }
+    if let Some((tier, false)) = &cache.last_second_opinion {
+        parts.push(format!("2nd-opinion:disagree→{tier}"));
+    }
+    if cache.last_route_error.is_some() {
+        parts.push("router:down".to_string());
+    }
+    format!(" · {}", parts.join(" · "))
 }
 
 /// Suffixes to append to the status-bar model label.
@@ -68,6 +108,8 @@ fn refresh_locked(guard: &mut Cache) {
 ///   list, else the route's `model_id`. Pinned (the default) adds no noise.
 /// - A decider-backed second opinion that *disagreed* with the route shows
 ///   as `2nd-opinion:disagree→balanced`; agreement stays quiet.
+/// - A failed last route (fail-open) shows `router:down`, sticky until the
+///   next route overwrites it, so silent fail-open stays visible.
 /// - Empty string when SystemOne routing is disabled.
 pub fn systemone_status_suffixes() -> String {
     let mut guard = cache().lock().unwrap_or_else(|e| e.into_inner());
@@ -77,36 +119,7 @@ pub fn systemone_status_suffixes() -> String {
     if stale {
         refresh_locked(&mut guard);
     }
-    if !guard.active {
-        return String::new();
-    }
-    let mut parts = Vec::with_capacity(3);
-    let think = match guard.thinking {
-        ThinkingMode::Auto => match &guard.last_thinking_applied {
-            Some(applied) => format!("auto→{applied}"),
-            None => "auto".to_string(),
-        },
-        ThinkingMode::Fixed(effort) => effort.as_str().to_string(),
-    };
-    parts.push(format!("think:{think}"));
-    if guard.model_selection == ModelSelection::Auto {
-        // What inference actually ran with first, then fallbacks.
-        let model = match &guard.last_model_selected {
-            Some(selected) => format!("auto→{selected}"),
-            None => match guard.last_model_ranking.first() {
-                Some(top) => format!("auto→{top}"),
-                None => match &guard.last_model_advisory {
-                    Some(advisory) => format!("auto→{advisory}"),
-                    None => "auto".to_string(),
-                },
-            },
-        };
-        parts.push(format!("model:{model}"));
-    }
-    if let Some((tier, false)) = &guard.last_second_opinion {
-        parts.push(format!("2nd-opinion:disagree→{tier}"));
-    }
-    format!(" · {}", parts.join(" · "))
+    render_suffixes(&guard)
 }
 
 #[cfg(test)]
@@ -123,5 +136,48 @@ mod tests {
         assert_eq!(systemone_status_suffixes(), "");
         unsafe { std::env::remove_var("GROK_LOCAL_SYSTEMONE") };
         cache().lock().unwrap().refreshed_at = None;
+    }
+
+    fn active_cache() -> Cache {
+        Cache {
+            active: true,
+            thinking: ThinkingMode::Auto,
+            model_selection: ModelSelection::Pinned,
+            ..Cache::default()
+        }
+    }
+
+    #[test]
+    fn auto_resolution_shows() {
+        let mut cache = active_cache();
+        assert_eq!(render_suffixes(&cache), " · think:auto");
+        cache.last_thinking_applied = Some("high".to_string());
+        assert_eq!(render_suffixes(&cache), " · think:auto→high");
+    }
+
+    #[test]
+    fn router_down_suffix_sticks_on_error() {
+        let mut cache = active_cache();
+        cache.last_thinking_applied = Some("high".to_string());
+        cache.last_route_error = Some("router unreachable".to_string());
+        assert_eq!(
+            render_suffixes(&cache),
+            " · think:auto→high · router:down"
+        );
+    }
+
+    #[test]
+    fn pinned_thinking_and_second_opinion() {
+        use xai_grok_systemone::Effort;
+
+        let mut cache = active_cache();
+        cache.thinking = ThinkingMode::Fixed(Effort::Ultra);
+        cache.last_second_opinion = Some(("balanced".to_string(), false));
+        assert_eq!(
+            render_suffixes(&cache),
+            " · think:ultra · 2nd-opinion:disagree→balanced"
+        );
+        cache.last_second_opinion = Some(("heavy".to_string(), true));
+        assert_eq!(render_suffixes(&cache), " · think:ultra");
     }
 }

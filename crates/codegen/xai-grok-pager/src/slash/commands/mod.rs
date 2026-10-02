@@ -57,6 +57,7 @@ pub mod session_info;
 pub mod settings_cmd;
 pub mod share;
 pub mod tasks;
+pub mod systemone_cmd;
 pub mod theme;
 pub mod thinking;
 pub mod timeline;
@@ -90,6 +91,7 @@ pub fn builtin_commands() -> Vec<Arc<dyn SlashCommand>> {
         Arc::new(effort::EffortCommand),
         Arc::new(thinking::ThinkingCommand),
         Arc::new(model::ModelCommand),
+        Arc::new(systemone_cmd::SystemoneCommand),
         Arc::new(context::ContextCommand),
         Arc::new(compact::CompactCommand),
         Arc::new(fork::ForkCommand),

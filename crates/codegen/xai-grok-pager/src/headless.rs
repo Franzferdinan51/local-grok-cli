@@ -924,6 +924,17 @@ pub async fn run_single_turn(
             model_selection,
         ));
         agent_config.reasoning_effort_override = Some(thinking_applied.reasoning_effort());
+        // Same record the interactive per-turn hook writes: keeps
+        // `systemone-last-route.json` (and `/systemone` diagnostics)
+        // accurate for headless runs too.
+        xai_grok_systemone::LastRoute::capture(
+            decision,
+            thinking_mode,
+            thinking_applied,
+            model_selection,
+            None,
+        )
+        .store();
     } else if let xai_grok_systemone::ThinkingMode::Fixed(effort) = thinking_mode {
         // Router off (or failed closed): a pinned thinking level still applies.
         agent_config.reasoning_effort_override = Some(effort.reasoning_effort());
