@@ -95,10 +95,13 @@ and refreshed (`git pull --ff-only`) on every reinstall. The shim serves
 Jev dialect, `POST /v1/decisions` (SGLang dialect), `POST /v1/decide`
 (JEV dialect), plus `GET /healthz`, `/metrics`, `/openapi.json`. Its judge
 engine is chosen by `SYSTEMONE_ENGINE`
-(`auto|local|sglang|jevk5|onnx|jev|kev`, default `auto`); remote engines are
-configured with `JEV_URL` / `SGLANG_BASE_URL` / `JEVK5_BASE_URL` /
+(`auto|local|sglang|jevk5|onnx|jev|kev|clef`, default `auto`); remote
+engines are configured with `JEV_URL` / `SGLANG_BASE_URL` / `JEVK5_BASE_URL` /
 `KEV_BASE_URL` (inherited from this process's environment when the shim is
-auto-started). The `:8079` decision sidecar is decide-only and is never a
+auto-started). `clef` runs Cloudflare's clef/clef-flash weights locally
+(multimodal; needs `pip install "systemone[clef]"` in the release dir,
+`CLEF_MODEL_ID` defaulting to `Cloudflare/clef-flash`) and is never
+auto-selected. The `:8079` decision sidecar is decide-only and is never a
 route fallback.
 
 `~/.grok-local/config.toml` `[systemone]` section:

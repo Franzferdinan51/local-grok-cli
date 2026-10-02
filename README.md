@@ -282,9 +282,13 @@ plan ranking (`POST /v1/systemone/rank-plans`), typed decisions
 (`POST /v1/systemone/decide`), the permutation probe
 (`POST /v1/systemone/permute`), and the Jev/SGLang/JEV decision dialects.
 Its judge engine follows `SYSTEMONE_ENGINE`
-(`auto|local|sglang|jevk5|onnx|jev|kev`); set `JEV_URL`,
+(`auto|local|sglang|jevk5|onnx|jev|kev|clef`); set `JEV_URL`,
 `SGLANG_BASE_URL`, `JEVK5_BASE_URL`, or `KEV_BASE_URL` to judge through a
-remote model instead of local weights.
+remote model instead of local weights. `clef` runs Cloudflare's
+clef/clef-flash weights locally (multimodal, beats Jev on most
+agent/tool benchmarks); it needs `pip install "systemone[clef]"` in the
+release dir first, plus `CLEF_MODEL_ID` (default
+`Cloudflare/clef-flash`) when the 27B is wanted.
 
 ### Decision engine (SystemOne)
 
