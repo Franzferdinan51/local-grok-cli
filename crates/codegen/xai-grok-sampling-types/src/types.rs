@@ -763,6 +763,11 @@ pub enum ReasoningEffort {
 }
 
 impl ReasoningEffort {
+    /// Map to the Responses API wire value. `Max` clamps to `Xhigh`:
+    /// the API rejects `reasoning_effort: "max"` with a 400 (supported
+    /// values end at `xhigh`), so the internal Ultra/Max tier must never
+    /// reach the wire. Local Ultra budgets and caps are unaffected —
+    /// only the emitted token is capped.
     pub fn to_responses_api(self) -> crate::rs::ReasoningEffort {
         match self {
             Self::None => crate::rs::ReasoningEffort::None,
@@ -771,7 +776,7 @@ impl ReasoningEffort {
             Self::Medium => crate::rs::ReasoningEffort::Medium,
             Self::High => crate::rs::ReasoningEffort::High,
             Self::Xhigh => crate::rs::ReasoningEffort::Xhigh,
-            Self::Max => crate::rs::ReasoningEffort::Max,
+            Self::Max => crate::rs::ReasoningEffort::Xhigh,
         }
     }
 
@@ -1322,6 +1327,30 @@ mod tests {
             "xhigh".parse::<ReasoningEffort>().unwrap(),
             ReasoningEffort::Xhigh
         );
+    }
+
+    #[test]
+    fn reasoning_effort_max_clamps_to_xhigh_on_the_wire() {
+        // The API 400s on reasoning_effort "max" (supported values end at
+        // xhigh): Ultra/Max must never be emitted, while every other tier
+        // maps through unchanged.
+        assert_eq!(
+            ReasoningEffort::Max.to_responses_api(),
+            crate::rs::ReasoningEffort::Xhigh
+        );
+        for (internal, wire) in [
+            (ReasoningEffort::None, crate::rs::ReasoningEffort::None),
+            (
+                ReasoningEffort::Minimal,
+                crate::rs::ReasoningEffort::Minimal,
+            ),
+            (ReasoningEffort::Low, crate::rs::ReasoningEffort::Low),
+            (ReasoningEffort::Medium, crate::rs::ReasoningEffort::Medium),
+            (ReasoningEffort::High, crate::rs::ReasoningEffort::High),
+            (ReasoningEffort::Xhigh, crate::rs::ReasoningEffort::Xhigh),
+        ] {
+            assert_eq!(internal.to_responses_api(), wire, "{internal:?}");
+        }
     }
 
     #[test]

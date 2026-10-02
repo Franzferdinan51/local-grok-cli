@@ -867,6 +867,8 @@ fn test_malformed_tool_arguments_sanitized_in_responses_api() {
 
 #[test]
 fn test_responses_request_carries_reasoning_effort_nested() {
+    // `Max` clamps to `xhigh`: the API 400s on reasoning.effort "max"
+    // (supported values end at xhigh).
     for (variant, expected) in [
         (crate::ReasoningEffort::None, "none"),
         (crate::ReasoningEffort::Minimal, "minimal"),
@@ -874,7 +876,7 @@ fn test_responses_request_carries_reasoning_effort_nested() {
         (crate::ReasoningEffort::Medium, "medium"),
         (crate::ReasoningEffort::High, "high"),
         (crate::ReasoningEffort::Xhigh, "xhigh"),
-        (crate::ReasoningEffort::Max, "max"),
+        (crate::ReasoningEffort::Max, "xhigh"),
     ] {
         let req = ConversationRequest {
             reasoning_effort: Some(variant),
