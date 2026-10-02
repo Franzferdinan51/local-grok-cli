@@ -279,7 +279,7 @@ pub fn resolve_plan_execute_models(
         );
     }
 
-    let preferred_in = |id: &str| usable.iter().any(|u| *u == id);
+    let preferred_in = |id: &str| usable.contains(&id);
     let planner_model = preferences
         .planner_model
         .as_deref()

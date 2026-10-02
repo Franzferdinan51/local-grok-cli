@@ -300,19 +300,17 @@ pub fn detect_boundary_event_from_tool_call(
     input_json: &str,
 ) -> Option<BoundaryCompactEventKind> {
     let lowered = tool_name.to_ascii_lowercase();
-    if lowered == "todo_write" || lowered == "todowrite" {
-        if COMPLETED_STATUS_RE.is_match(input_json) {
-            return Some(BoundaryCompactEventKind::SubtaskVerified);
-        }
-        return None;
+    if (lowered == "todo_write" || lowered == "todowrite")
+        && COMPLETED_STATUS_RE.is_match(input_json)
+    {
+        return Some(BoundaryCompactEventKind::SubtaskVerified);
     }
-    if lowered == "bash" || lowered == "run_terminal_command" || lowered == "run_terminal_cmd" {
-        if let Some(command) = tool_command_argument(input_json)
-            && TEST_COMMAND_RE.is_match(&command)
-            && !FAILURE_MARKER_RE.is_match(&command)
-        {
-            return Some(BoundaryCompactEventKind::TestsPassed);
-        }
+    if (lowered == "bash" || lowered == "run_terminal_command" || lowered == "run_terminal_cmd")
+        && let Some(command) = tool_command_argument(input_json)
+        && TEST_COMMAND_RE.is_match(&command)
+        && !FAILURE_MARKER_RE.is_match(&command)
+    {
+        return Some(BoundaryCompactEventKind::TestsPassed);
     }
     None
 }

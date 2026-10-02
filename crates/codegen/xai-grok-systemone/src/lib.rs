@@ -24,6 +24,7 @@
 //!   [`suggest::suggestions_from_ranked_tools`]).
 //! - [`rank_plans`] scores candidate plans via `POST /v1/systemone/rank-plans`
 //!   (advisory, fail-open).
+//!
 //! Older shims omit these keys: absence is "not present", never an error.
 //!
 //! # Thinking levels (v0.5.1)

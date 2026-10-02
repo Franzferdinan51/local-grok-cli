@@ -184,9 +184,10 @@ impl Effort {
 
 /// The user's thinking-level setting. Fully independent from
 /// [`ModelSelection`]: resolving one never touches the other.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThinkingMode {
     /// The SystemOne router picks the effort per task (may reach XHigh/Ultra).
+    #[default]
     Auto,
     /// Pinned level: the router stands down on effort for this session.
     Fixed(Effort),
@@ -225,11 +226,7 @@ impl ThinkingMode {
     }
 }
 
-impl Default for ThinkingMode {
-    fn default() -> Self {
-        Self::Auto
-    }
-}
+
 
 /// The user's model-selection setting. Fully independent from
 /// [`ThinkingMode`]. `Pinned` means "use the session's active model" (the
