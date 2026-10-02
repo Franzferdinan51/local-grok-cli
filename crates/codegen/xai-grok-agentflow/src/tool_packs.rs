@@ -621,7 +621,29 @@ pub struct ComputeToolShortlistInput<'a> {
     /// When set, forces the full tool list with this reason (e.g. a
     /// pack miss earlier this turn).
     pub force_full_reason: Option<&'a str>,
+    /// Shim-ranked tool ids (`ranked_tools` from the route decision):
+    /// advisory keep-signals. A ranked id matching a tool (or its MCP
+    /// server) keeps it; ranked ids NEVER prune — anything they don't
+    /// name still goes through the label path.
+    pub ranked_tool_ids: &'a [String],
     pub get_env: EnvReader<'a>,
+}
+
+/// Advisory keep-signal match: a shim-ranked tool id matches a local
+/// tool/server name when either normalized form contains the other.
+/// Normalization lowercases and strips non-alphanumerics; minimum length
+/// 3 on both sides so junk ids never match. Mirrors ZCode's
+/// `rankedToolMatchesName`. Pure.
+pub fn ranked_tool_matches_name(ranked_id: &str, name: &str) -> bool {
+    fn normalize(s: &str) -> String {
+        s.chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect::<String>()
+            .to_ascii_lowercase()
+    }
+    let id = normalize(ranked_id);
+    let target = normalize(name);
+    id.len() >= 3 && target.len() >= 3 && (id.contains(&target) || target.contains(&id))
 }
 
 /// Result of [`compute_tool_shortlist`].
@@ -721,6 +743,7 @@ pub fn compute_tool_shortlist(input: ComputeToolShortlistInput<'_>) -> ToolShort
 
     let mut keep_names: Vec<String> = Vec::new();
     let mut disallowed_names: Vec<String> = Vec::new();
+    let mut ranked_kept: usize = 0;
     for tool in input.tools {
         let lowered = tool.name.to_ascii_lowercase();
         let mut keep_tool = keep.iter().any(|k| *k == lowered);
@@ -738,6 +761,19 @@ pub fn compute_tool_shortlist(input: ComputeToolShortlistInput<'_>) -> ToolShort
                 // MCP tool with no identifiable server: fail open.
                 None => true,
             };
+        }
+        // Shim-ranked keep-signals: a ranked id matching the tool or its
+        // server keeps it. Advisory only — never prunes.
+        if !keep_tool && !input.ranked_tool_ids.is_empty() {
+            let server = tool.server.as_deref().unwrap_or("");
+            let matched = input.ranked_tool_ids.iter().any(|id| {
+                ranked_tool_matches_name(id, &tool.name)
+                    || (!server.is_empty() && ranked_tool_matches_name(id, server))
+            });
+            if matched {
+                keep_tool = true;
+                ranked_kept += 1;
+            }
         }
         if keep_tool {
             keep_names.push(tool.name.clone());
@@ -764,12 +800,13 @@ pub fn compute_tool_shortlist(input: ComputeToolShortlistInput<'_>) -> ToolShort
         labels: labels.clone(),
         confidence: Some(confidence),
         reason: format!(
-            "route tier={} confidence={:.2} labels=[{}] kept={}/{}",
+            "route tier={} confidence={:.2} labels=[{}] kept={}/{} rankedKeeps={}",
             input.tier.unwrap_or("none"),
             confidence,
             labels.join(","),
             keep_names.len(),
-            input.tools.len()
+            input.tools.len(),
+            ranked_kept
         ),
         schema_tokens_before: before,
         schema_tokens_after: after,
@@ -956,6 +993,7 @@ mod tests {
             confidence_threshold: None,
             prune_config_enabled: Some(true),
             force_full_reason: None,
+            ranked_tool_ids: &[],
             get_env: &|_| None,
         }
     }
@@ -1094,6 +1132,76 @@ mod tests {
         assert!(!shortlist.pruned);
         assert_eq!(shortlist.keep_names.len(), 2);
         assert!(shortlist.reason.contains("force-full"));
+    }
+
+    #[test]
+    fn ranked_matcher_normalizes_and_floors_length() {
+        assert!(ranked_tool_matches_name(
+            "github__create_pr",
+            "github__create_pr"
+        ));
+        // Either direction contains: a server id keeps its tools.
+        assert!(ranked_tool_matches_name("GitHub", "github__list_repos"));
+        assert!(ranked_tool_matches_name("github__list_repos", "github"));
+        // Punctuation/case-insensitive.
+        assert!(ranked_tool_matches_name("create-pr", "create_pr"));
+        // Junk never matches: minimum length 3, no empty contains.
+        assert!(!ranked_tool_matches_name("ab", "abcdef"));
+        assert!(!ranked_tool_matches_name("abc", "ab"));
+        assert!(!ranked_tool_matches_name("", ""));
+        assert!(!ranked_tool_matches_name("weather", "github__create_pr"));
+    }
+
+    #[test]
+    fn ranked_ids_keep_otherwise_pruned_tools() {
+        let tools = tools_named(&["read_file", "lsp"]);
+        let labels = vec!["media".to_string()];
+        // Without the signal, `lsp` is pruned under media labels.
+        let without = compute_tool_shortlist(input(&tools, &labels, "make artwork", Some(0.95)));
+        assert!(without.disallowed_names.iter().any(|k| k == "lsp"));
+        // With it, the ranked id keeps the tool — and the reason says so.
+        let ranked = vec!["lsp".to_string()];
+        let with = compute_tool_shortlist(ComputeToolShortlistInput {
+            ranked_tool_ids: &ranked,
+            ..input(&tools, &labels, "make artwork", Some(0.95))
+        });
+        assert!(with.keep_names.iter().any(|k| k == "lsp"));
+        assert!(with.reason.contains("rankedKeeps=1"), "{}", with.reason);
+    }
+
+    #[test]
+    fn ranked_ids_keep_mcp_servers_by_name() {
+        let tools = tools_named(&["read_file", "figma__get_design"]);
+        let labels = vec!["media".to_string()];
+        let without = compute_tool_shortlist(input(&tools, &labels, "make artwork", Some(0.95)));
+        assert!(
+            without
+                .disallowed_names
+                .iter()
+                .any(|k| k == "figma__get_design")
+        );
+        let ranked = vec!["figma".to_string()];
+        let with = compute_tool_shortlist(ComputeToolShortlistInput {
+            ranked_tool_ids: &ranked,
+            ..input(&tools, &labels, "make artwork", Some(0.95))
+        });
+        assert!(with.keep_names.iter().any(|k| k == "figma__get_design"));
+        assert!(with.reason.contains("rankedKeeps=1"), "{}", with.reason);
+    }
+
+    #[test]
+    fn ranked_ids_never_prune_on_their_own() {
+        // Ranked ids that match nothing change nothing: the label path
+        // still decides.
+        let tools = tools_named(&["read_file", "lsp"]);
+        let labels = vec!["media".to_string()];
+        let ranked = vec!["unrelated-server".to_string()];
+        let with = compute_tool_shortlist(ComputeToolShortlistInput {
+            ranked_tool_ids: &ranked,
+            ..input(&tools, &labels, "make artwork", Some(0.95))
+        });
+        assert!(with.disallowed_names.iter().any(|k| k == "lsp"));
+        assert!(with.reason.contains("rankedKeeps=0"), "{}", with.reason);
     }
 
     #[test]

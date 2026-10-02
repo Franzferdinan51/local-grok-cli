@@ -112,7 +112,7 @@ impl super::SessionActor {
         // it, and thinking never influences model selection.
         let thinking_applied = thinking_mode.resolve(&decision);
         tracing::info!(
-            "systemone: tier={} routed_effort={} thinking={} thinking_mode={} model_selection={} max_turns={} source={} confidence={:.2} model_advisory={}",
+            "systemone: tier={} routed_effort={} thinking={} thinking_mode={} model_selection={} max_turns={} source={} confidence={:.2} model_advisory={} uncertain={} second_opinion={}",
             decision.tier.map(|t| t.as_str()).unwrap_or("fail-open"),
             decision.effort.as_str(),
             thinking_applied.as_str(),
@@ -122,6 +122,16 @@ impl super::SessionActor {
             decision.source.as_str(),
             decision.confidence.unwrap_or(0.0),
             decision.model_id.as_deref().unwrap_or("-"),
+            decision.uncertain.unwrap_or(false),
+            decision
+                .second_opinion
+                .as_ref()
+                .map(|op| format!(
+                    "{}:{}",
+                    op.tier,
+                    if op.agree { "agree" } else { "disagree" }
+                ))
+                .unwrap_or_else(|| "-".to_string()),
         );
         self.apply_systemone_decision(
             &decision,
@@ -202,13 +212,12 @@ impl super::SessionActor {
         {
             match self.models_manager.resolve_model_catalog_key(pick) {
                 Some(catalog_key) => {
-                    if let Some(mut sampling) =
-                        self.chat_state_handle.get_sampling_config().await
-                    {
+                    if let Some(mut sampling) = self.chat_state_handle.get_sampling_config().await {
                         // Compare canonical catalog keys so a pick spelled as
                         // a slug doesn't churn when it's the current model.
-                        let current_key =
-                            self.models_manager.resolve_model_catalog_key(&sampling.model);
+                        let current_key = self
+                            .models_manager
+                            .resolve_model_catalog_key(&sampling.model);
                         if current_key.as_deref() != Some(catalog_key.as_str()) {
                             sampling.model = catalog_key.clone();
                             self.chat_state_handle.update_sampling_config(sampling);
@@ -228,14 +237,9 @@ impl super::SessionActor {
                                 self.models_manager
                                     .model_compactions_remaining(&catalog_key),
                             );
-                            self.compaction_at_tokens.set(
-                                self.models_manager
-                                    .model_compaction_at_tokens(&catalog_key),
-                            );
-                            tracing::info!(
-                                "systemone: model selection auto → {}",
-                                catalog_key
-                            );
+                            self.compaction_at_tokens
+                                .set(self.models_manager.model_compaction_at_tokens(&catalog_key));
+                            tracing::info!("systemone: model selection auto → {}", catalog_key);
                         }
                         model_selected = Some(catalog_key);
                     }

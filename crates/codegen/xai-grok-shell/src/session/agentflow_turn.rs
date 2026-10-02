@@ -81,6 +81,7 @@ pub(crate) struct AgentFlowBudgetFired {
 }
 
 /// Per-turn agent-flow state, owned by `SessionActor` behind a mutex.
+#[derive(Default)]
 pub(crate) struct AgentFlowTurnState {
     config: AgentFlowConfig,
     tier_name: Option<String>,
@@ -88,31 +89,19 @@ pub(crate) struct AgentFlowTurnState {
     confidence: Option<f64>,
     labels: Vec<String>,
     task_text: String,
+    /// Shim-ranked tool ids from the route decision (advisory keep-signals
+    /// for the tool shortlist; never prune).
+    ranked_tool_ids: Vec<String>,
+    /// True when the route's `tool_scoring` is `"skipped"` (uncertain
+    /// route): the decider said "no tool pruning", so the shortlist runs
+    /// force-full.
+    tool_scoring_skipped: bool,
     policy: Option<EffortBehaviorPolicy>,
     budgets: TurnBudgets,
     plan_gate: Option<PlanExecuteGateDecision>,
     doom: DoomLoopTurnState,
     budget_stage: BudgetStageState,
     last_sent_tool_names: Vec<String>,
-}
-
-impl Default for AgentFlowTurnState {
-    fn default() -> Self {
-        Self {
-            config: AgentFlowConfig::default(),
-            tier_name: None,
-            effort_name: None,
-            confidence: None,
-            labels: Vec::new(),
-            task_text: String::new(),
-            policy: None,
-            budgets: TurnBudgets::default(),
-            plan_gate: None,
-            doom: DoomLoopTurnState::default(),
-            budget_stage: BudgetStageState::default(),
-            last_sent_tool_names: Vec::new(),
-        }
-    }
 }
 
 fn read_env(key: &str) -> Option<String> {
@@ -126,6 +115,8 @@ impl AgentFlowTurnState {
         self.confidence = None;
         self.labels.clear();
         self.task_text.clear();
+        self.ranked_tool_ids.clear();
+        self.tool_scoring_skipped = false;
         self.policy = None;
         self.budgets = TurnBudgets::default();
         self.plan_gate = None;
@@ -209,6 +200,15 @@ impl AgentFlowTurnState {
         self.confidence = confidence;
         self.labels = labels;
         self.task_text = prompt_text.to_owned();
+        self.ranked_tool_ids = decision
+            .ranked_tools
+            .iter()
+            .filter_map(|t| {
+                let id = t.id.trim();
+                (!id.is_empty()).then(|| id.to_owned())
+            })
+            .collect();
+        self.tool_scoring_skipped = decision.tool_scoring.as_deref() == Some("skipped");
         self.policy = Some(policy);
         self.budgets = budgets;
         self.plan_gate = gate;
@@ -253,7 +253,14 @@ impl AgentFlowTurnState {
             confidence: self.confidence,
             confidence_threshold: Some(self.config.prune_confidence),
             prune_config_enabled: Some(self.config.prune),
-            force_full_reason: None,
+            force_full_reason: if self.tool_scoring_skipped {
+                // The decider skipped tool scoring for this route
+                // (uncertain): honor its "no tool pruning".
+                Some("tool_scoring=skipped: uncertain route, no tool pruning")
+            } else {
+                None
+            },
+            ranked_tool_ids: &self.ranked_tool_ids,
             get_env,
         });
         tracing::info!(
@@ -467,10 +474,7 @@ pub(crate) async fn select_best_plan(
             let idx = plans.iter().position(|p| p.id == r.id)?;
             Some((idx, score))
         })
-        .max_by(|a, b| {
-            a.1.partial_cmp(&b.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(idx, _)| idx)
         .unwrap_or(0);
     (winner, rankings)

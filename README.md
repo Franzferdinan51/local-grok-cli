@@ -136,10 +136,10 @@ requirements — Rust, DotSlash, protoc — are in the next section.)
   Linux x86_64, macOS on Apple Silicon, Windows x86_64. There are no
   official builds for Intel macOS, ARM Windows, ARM Linux, or 32-bit.
 - **Disk** — ~250 MB for the binary (release assets measure 155–230 MB
-  by platform), plus ~1 GB for the built-in SystemOne router (torch
-  ~0.6 GB, GLiClass edge checkpoint 256 MB — both measured), plus
-  ~15 GB if you enable the Jeff-1 second head (its model weights in the
-  HuggingFace cache — measured; skip with `SYSTEMONE_JEFF1=0`).
+  by platform), plus ~1 GB for the built-in SystemOne decision layer
+  (torch ~0.6 GB, GLiClass edge checkpoint 256 MB — both measured),
+  plus ~15 GB if you enable the Jeff-1 second head (its model weights
+  in the HuggingFace cache — measured; skip with `SYSTEMONE_JEFF1=0`).
 - **Inference (the real requirement)** — grok-local needs somewhere to
   run models: LM Studio locally (OpenAI-compatible,
   `http://localhost:1234` by default) or an API key for a hosted
@@ -148,13 +148,14 @@ requirements — Rust, DotSlash, protoc — are in the next section.)
   card / LM Studio for the specific model before loading it. Reference
   setup: Windows 11 PC with 64 GB RAM serving models through LM Studio;
   Mac mini (M4 Pro, 24 GB) reaching them over LM Link.
-- **SystemOne routing (on by default)** — the router is a Python shim,
-  so it needs Python >= 3.10 (per the shim's `requires-python`).
-  grok-local looks for `python3.11` by default; override with
-  `SYSTEMONE_PYTHON`. Auto-start is attempted on Unix only — on Windows
-  start the shim yourself (`python -m systemone.shim`) or keep it
-  running; grok-local probes port `:8765` either way and works fail-open
-  without it. Kill switches: `GROK_LOCAL_SYSTEMONE=0` (routing off),
+- **SystemOne decisions (on by default)** — the decision layer is a
+  Python shim, so it needs Python >= 3.10 (per the shim's
+  `requires-python`). grok-local looks for `python3.11` by default;
+  override with `SYSTEMONE_PYTHON`. Auto-start is attempted on Unix
+  only — on Windows start the shim yourself
+  (`python -m systemone.shim`) or keep it running; grok-local probes
+  port `:8765` either way and works fail-open without it. Kill
+  switches: `GROK_LOCAL_SYSTEMONE=0` (decisions off),
   `SYSTEMONE_JEFF1=0` (GLiClass only, no Jeff-1 second head).
 
 **First run:** `grok-local onboard` walks through a requirements check,
@@ -226,7 +227,30 @@ The user guide ships with the pager crate:
 — getting started, keyboard shortcuts, slash commands, configuration, theming,
 MCP servers, skills, plugins, hooks, headless mode, sandboxing, and more.
 
-## SystemOne native routing (v0.5.5)
+## SystemOne decision layer
+
+SystemOne is a **decision layer**, not a cost router: every task runs See >
+Decide > Act, and the local SystemOne shim (`http://127.0.0.1:8765`,
+`knowledgator/gliclass-edge-v3.0` classifier) makes the decisions with
+calibrated probabilities and honest uncertainty. Cost/quality routing is one
+facet of `route`, which is one facet of deciding. The client is the embedded
+`xai-grok-systemone` Rust crate, compiled into this binary — no external
+adapter to wire, no config entries to add, no shim to launch by hand. If the
+shim is not running, the binary starts the installed shim itself (detached;
+the model is already in the HuggingFace cache, so cold start is seconds).
+
+What SystemOne decides for every task (headless `--single` prompts and
+interactive/ACP per-turn prompts alike):
+
+| Decision | Endpoint | How grok-local uses it |
+|---|---|---|
+| Effort tier + turn budget | `route` | reasoning effort + session turn cap per task |
+| Model | `route` (`ranked_models`) | best-value pick becomes the session model under `model=auto` (catalog-resolved, fail-open) |
+| Tool shortlist | `route` (`ranked_tools`) | shim-ranked ids are keep-signals; uncertain routes force the full list ("no tool pruning") |
+| Which plan to run | `rank-plans` | plan-then-execute gate ranks candidate plans |
+| Typed questions | `decide` | `grok-local decide` (`choice`/`noul`/`score`) |
+| Choice stability | `permute` | `grok-local decide --verify` (STABLE/UNSTABLE verdict) |
+| Bulk judging | `batch` | `grok-local decide --batch` (up to 32 bodies, per-item results) |
 
 Two independent selectors, settable per session or per CLI invocation:
 
@@ -235,16 +259,7 @@ Two independent selectors, settable per session or per CLI invocation:
 | Model | `auto` or a pinned model | pinned |
 | Thinking | `off` / `low` / `medium` / `high` / `xhigh` / `ultra` / `auto` | `auto` |
 
-Every task — `grok-local --single` headless prompts and interactive/ACP
-per-turn prompts alike — routes through the local **SystemOne** router
-(`http://127.0.0.1:8765`, the `knowledgator/gliclass-edge-v3.0` classifier)
-**natively**: the router client is the embedded `xai-grok-systemone` Rust
-crate, compiled into this binary — no external adapter to wire, no config
-entries to add, no shim to launch by hand. If the router is not running, the
-binary starts the installed shim itself (detached; the model is already in
-the HuggingFace cache, so cold start is seconds).
-
-The returned tier maps to a reasoning effort and loop cap. Caps are
+The decided tier maps to a reasoning effort and loop cap. Caps are
 deliberately roomy — agentic loops burn a turn per tool round-trip, so
 tight caps abort long tasks:
 
@@ -263,37 +278,41 @@ Subagents get 8–64 turns by tier. Every budget stays overridable:
 `GROK_LOCAL_EFFORT_<TIER>_MAX_TOOL_CALLS` env, or the
 `[agent_flow.effort.<tier>]` config table.
 
-Headless: the routed effort/cap apply only when `--reasoning-effort` /
-`--max-turns` were not passed explicitly. Interactive: the routed effort
-auto-tunes each turn unless you explicitly set one (then the router
-stands down); the routed turn cap applies unless `--max-turns` was
-passed. Route-driven MCP server suggestions are logged; actual pruning
-of the per-session MCP list (headless only) is opt-in and conservative
-(live router, ≥ 0.85 confidence, cheap tier only).
+Headless: the decided effort/cap apply only when `--reasoning-effort` /
+`--max-turns` were not passed explicitly. Interactive: the decided effort
+auto-tunes each turn unless you explicitly set one (then the decider
+stands down — explicit wins); the decided turn cap applies unless
+`--max-turns` was passed. Under `thinking=auto` the decider picks the
+effort per task and may reach `xhigh`/`ultra` for heavy work; a pinned
+level (`/thinking high`, `--thinking low`) applies instead. Under
+`model=auto` (`/model auto`, `--model auto`) the best-value pick from the
+shim's expected-utility ranking **becomes the session model** — but only
+when it resolves against the model catalog; unknown ids keep the current
+model (fail-open). This names the model the inference layer routes to,
+exactly like a user-typed model id: nothing is ever loaded or unloaded.
 
-Fail-open always: a router outage or error leaves the session exactly as if
-routing did not exist. One greppable `systemone: …` line on stderr proves
-what routing did (source, tier, effort, max_turns, confidence). Route-store
-failures are traced (never silent), and a sticky `router:down` suffix in
-the status line tells you at a glance when the router is unreachable.
+Uncertain routes are first-class: the decider bumps effort one level,
+records a second opinion (agree/disagree + tier), and skips tool scoring —
+grok-local honors all three (effort applies, pruning stands down, `/systemone`
+shows the `UNCERTAIN` marker with the second opinion and model ranking).
 
-`/systemone` (slash command) prints live routing diagnostics: shim health,
-last route (tier/effort/confidence/model), and any recorded route error —
-the fastest way to check what the router is doing mid-session.
+Fail-open always: a shim outage or error leaves the session exactly as if
+deciding did not exist. One greppable `systemone: …` line on stderr proves
+what was decided (source, tier, effort, max_turns, confidence, uncertain,
+second_opinion). Route-store failures are traced (never silent), and a
+sticky `router:down` suffix in the status line tells you at a glance when
+the shim is unreachable.
 
-Under `thinking=auto` the router picks the effort per task and may reach
-`xhigh`/`ultra` for heavy work; a pinned level (`/thinking high`,
-`--thinking low`) makes the router stand down on effort and that level is
-applied instead. Under `model=auto` (`/model auto`, `--model auto`) the
-router's model pick is advisory only — it is logged and shown in the status
-line, never acted on. This binary never unloads or switches your loaded
-model.
+`/systemone` (slash command) prints live decision diagnostics: shim health,
+last decision (tier/effort/confidence/model/uncertainty/second opinion),
+and any recorded error — the fastest way to check what the decider is
+doing mid-session.
 
 Kill-switches (env wins over `~/.grok-local/config.toml` `[systemone]`):
 
 | Env | Effect |
 |---|---|
-| `GROK_LOCAL_SYSTEMONE=0` | Disable all routing behavior |
+| `GROK_LOCAL_SYSTEMONE=0` | Disable all decision behavior |
 | `GROK_LOCAL_SYSTEMONE_NO_AUTOSTART=1` | Probe only; never start the shim |
 | `GROK_LOCAL_SYSTEMONE_PRUNE=1` | Opt in to conservative MCP pruning |
 

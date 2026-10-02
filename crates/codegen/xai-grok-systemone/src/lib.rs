@@ -76,12 +76,15 @@ pub mod state;
 pub mod suggest;
 
 pub use config::SystemOneConfig;
-pub use decide::{DecideDecision, DecideError, DecideType, decide};
+pub use decide::{
+    BatchItemResult, BatchResults, DecideDecision, DecideError, DecideType, PermuteRun,
+    PermuteVerdict, batch, decide, permute,
+};
+pub use records::{record_decide_decision, record_route_decision};
 pub use route::{
     Effort, ModelSelection, PlanInput, PlanRanking, RankedModel, RankedTool, RouteDecision,
     RouteSource, SecondOpinion, ThinkingMode, Tier, rank_plans, route_for_task,
 };
-pub use records::{record_decide_decision, record_route_decision};
 pub use shim::{RouterStatus, ensure_router};
 pub use state::LastRoute;
 pub use suggest::{
