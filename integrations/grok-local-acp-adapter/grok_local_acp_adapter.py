@@ -76,6 +76,7 @@ from collections import deque
 import concurrent.futures
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 
 NAME = "grok-local-adapter"
@@ -482,6 +483,15 @@ def _record_route_decision(decision, kind):
         pass
 
 
+def _is_http_url(url):
+    """True only for http(s) URLs (urllib would otherwise fetch file:/etc)."""
+    try:
+        scheme = urllib.parse.urlsplit(str(url)).scheme.lower()
+    except Exception:
+        return False
+    return scheme in ("http", "https")
+
+
 def _rank_plans_url(route_url):
     """Derive a /v1/systemone/rank-plans URL from a configured /route URL.
     Returns None for unrecognized paths (never invent one we don't know)."""
@@ -513,7 +523,7 @@ def _rank_plans(task_desc, plans):
     }).encode()
     for url in cfg.get("systemone_urls", []):
         rp_url = _rank_plans_url(url)
-        if not rp_url:
+        if not rp_url or not _is_http_url(rp_url):
             continue
         try:
             req = urllib.request.Request(rp_url, data=body, method="POST",
@@ -591,6 +601,9 @@ def systemone_route(task_desc, kind="prompt", session_id=None):
     body = json.dumps(route_body).encode()
     last_err = None
     for url in cfg.get("systemone_urls", []):
+        if not _is_http_url(url):
+            last_err = "skipping non-http systemone URL"
+            continue
         try:
             req = urllib.request.Request(url, data=body, method="POST",
                                          headers={"Content-Type": "application/json"})

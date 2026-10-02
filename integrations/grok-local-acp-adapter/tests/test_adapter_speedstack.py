@@ -422,6 +422,23 @@ class SpeedStackTest(unittest.TestCase):
         self.assertEqual(rankings[1]["score"], 0.8)
         self.assertEqual(rankings[1]["p_success"], 0.9)
 
+    def test_non_http_systemone_urls_skipped(self):
+        self.assertTrue(mod._is_http_url("http://127.0.0.1:8765/x"))
+        self.assertTrue(mod._is_http_url("https://example.com/x"))
+        for bad in ("file:///etc/passwd", "ftp://x/y", "notaurl", "",
+                    None, 42):
+            self.assertFalse(mod._is_http_url(bad), bad)
+        mod._speed_config["systemone_urls"] = ["file:///etc/passwd"]
+        with mock.patch("urllib.request.urlopen") as uo:
+            d = mod.systemone_route("do a thing")
+            w, rankings = mod._rank_plans(
+                "task", [{"id": "a", "text": "plan a"}])
+        uo.assert_not_called()
+        self.assertEqual(d["source"], "fail-open")
+        self.assertIn("non-http", d["error"])
+        self.assertEqual(w, 0)
+        self.assertIsNone(rankings[0]["score"])
+
     def test_rank_plans_legacy_keys_fallback(self):
         plans = [{"id": "a", "text": "plan a"}, {"id": "b", "text": "plan b"}]
         for key in ("rankings", "ranked_plans"):
