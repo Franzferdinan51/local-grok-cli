@@ -16,7 +16,7 @@ use xai_grok_sampling_types::{ReasoningEffort, ReasoningEffortOption};
 
 /// One model advertised by LM Studio.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DiscoveredModel {
+pub(crate) struct DiscoveredModel {
     pub id: String,
     pub loaded: bool,
     pub max_context_length: Option<u64>,
@@ -64,12 +64,12 @@ fn local_reasoning_effort_options() -> Vec<ReasoningEffortOption> {
 }
 
 /// Parse LM Studio native `/api/v0/models` JSON.
-pub fn parse_v0_models(body: &serde_json::Value) -> Vec<DiscoveredModel> {
+pub(crate) fn parse_v0_models(body: &serde_json::Value) -> Vec<DiscoveredModel> {
     parse_data_array(body, true)
 }
 
 /// Parse OpenAI-compatible `/v1/models` JSON.
-pub fn parse_v1_models(body: &serde_json::Value) -> Vec<DiscoveredModel> {
+pub(crate) fn parse_v1_models(body: &serde_json::Value) -> Vec<DiscoveredModel> {
     parse_data_array(body, false)
 }
 
@@ -120,7 +120,7 @@ fn parse_data_array(body: &serde_json::Value, v0: bool) -> Vec<DiscoveredModel> 
 
 /// List downloaded chat models (llm / vlm). Loaded ones stay first so `/model`
 /// still surfaces what is in memory, without hiding the rest of the library.
-pub fn select_listed_models(models: Vec<DiscoveredModel>) -> Vec<DiscoveredModel> {
+pub(crate) fn select_listed_models(models: Vec<DiscoveredModel>) -> Vec<DiscoveredModel> {
     let mut chat: Vec<DiscoveredModel> = models
         .into_iter()
         .filter(|m| is_chat_model(&m.kind, &m.id))
@@ -132,7 +132,7 @@ pub fn select_listed_models(models: Vec<DiscoveredModel>) -> Vec<DiscoveredModel
 /// Resolve the LM Studio API key from an optional raw env value.
 /// Returns `LM_STUDIO_DUMMY_API_KEY` when `env_value` is absent, empty, or blank.
 /// This is a pure function so it can be tested with injected input.
-pub fn resolve_lm_studio_api_key(env_value: Option<&str>) -> String {
+pub(crate) fn resolve_lm_studio_api_key(env_value: Option<&str>) -> String {
     env_value
         .filter(|k| !k.trim().is_empty())
         .map(str::to_owned)
@@ -142,12 +142,12 @@ pub fn resolve_lm_studio_api_key(env_value: Option<&str>) -> String {
 /// Resolve the LM Studio API key: `LM_STUDIO_API_KEY` env var if set and non-blank,
 /// else `LM_STUDIO_DUMMY_API_KEY` for backward compatibility with unprotected servers.
 /// This is the single source of truth for all LM Studio bearer-token construction.
-pub fn lm_studio_api_key() -> String {
+pub(crate) fn lm_studio_api_key() -> String {
     resolve_lm_studio_api_key(std::env::var(LM_STUDIO_API_KEY_ENV_VAR).ok().as_deref())
 }
 
 /// Catalog entry for one LM Studio chat model id (OpenAI-compat).
-pub fn entry_for_id(id: &str, inference_base: &str) -> ModelEntry {
+pub(crate) fn entry_for_id(id: &str, inference_base: &str) -> ModelEntry {
     entry_for_discovered(
         &DiscoveredModel {
             id: id.to_string(),
@@ -195,7 +195,7 @@ fn entry_for_discovered(
 }
 
 /// Turn discovered LM Studio models into the shell catalog (chat_completions).
-pub fn catalog_from_discovered(
+pub(crate) fn catalog_from_discovered(
     models: Vec<DiscoveredModel>,
     inference_base: &str,
     resolved_api_key: Option<&str>,
@@ -212,7 +212,7 @@ pub fn catalog_from_discovered(
 }
 
 /// Parse whichever LM Studio JSON shape we got.
-pub fn catalog_from_lm_studio_json(
+pub(crate) fn catalog_from_lm_studio_json(
     body: &serde_json::Value,
     inference_base: &str,
 ) -> IndexMap<String, ModelEntry> {
@@ -220,7 +220,7 @@ pub fn catalog_from_lm_studio_json(
 }
 
 /// Parse whichever LM Studio JSON shape we got, threading a resolved API key to all entries.
-pub fn catalog_from_lm_studio_json_with_key(
+pub(crate) fn catalog_from_lm_studio_json_with_key(
     body: &serde_json::Value,
     inference_base: &str,
     resolved_api_key: Option<&str>,
@@ -240,7 +240,7 @@ pub fn catalog_from_lm_studio_json_with_key(
 }
 
 /// Blocking GET of LM Studio's model list. `None` if the server is down or empty.
-pub fn fetch_local_inference_catalog(
+pub(crate) fn fetch_local_inference_catalog(
     endpoints: &EndpointsConfig,
 ) -> Option<IndexMap<String, ModelEntry>> {
     let base = endpoints.resolve_inference_base_url();

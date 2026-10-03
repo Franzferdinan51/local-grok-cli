@@ -1,6 +1,5 @@
 use std::path::Path;
 use std::process::Command;
-
 fn git_stdout(args: &[&str]) -> Option<String> {
     Command::new("git")
         .args(args)
@@ -10,7 +9,6 @@ fn git_stdout(args: &[&str]) -> Option<String> {
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| s.trim().to_string())
 }
-
 fn main() {
     println!("cargo:rerun-if-env-changed=GROK_VERSION");
     println!("cargo:rerun-if-env-changed=GROK_LOCAL_VERSION");
@@ -27,7 +25,6 @@ fn main() {
     for path in watch_paths.iter().filter(|p| Path::new(p).exists()) {
         println!("cargo:rerun-if-changed={path}");
     }
-
     let commit = git_stdout(&["rev-parse", "HEAD"])
         .map(|s| s.chars().take(12).collect::<String>())
         .filter(|s| s.len() == 12)

@@ -9,7 +9,7 @@
 //! This is the new spelling of `/effort`; `/effort <level>` is equivalent to
 //! `/thinking <level>` for non-auto levels.
 
-use crate::app::actions::Action;
+use crate::app::actions::{Action, ModelChoice};
 use crate::slash::command::{
     AppCtx, ArgItem, CommandExecCtx, CommandResult, SlashCommand, slash_meta,
 };
@@ -106,10 +106,11 @@ impl SlashCommand for ThinkingCommand {
                 };
                 // Same live wire path as `/effort`: the session marks the
                 // effort as thinking-owned so Auto routing may update it later.
-                CommandResult::Action(Action::SwitchModel {
+                CommandResult::Action(Action::SwitchModel(ModelChoice {
                     model_id,
                     effort: Some(effort.reasoning_effort()),
-                })
+                    context_window_selection: None,
+                }))
             }
             ThinkingMode::Auto => CommandResult::Message(format!(
                 "Thinking: auto — SystemOne picks the reasoning level per task \

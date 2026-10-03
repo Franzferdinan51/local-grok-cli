@@ -142,7 +142,13 @@ mod tests {
     fn capture_round_trips() {
         let mut d = RouteDecision::fail_open(&SystemOneConfig::default(), None);
         d.model_id = Some("ornith-1.5-9b".to_string());
-        let lr = LastRoute::capture(&d, ThinkingMode::Auto, Effort::High, ModelSelection::Auto, Some("ornith-1.5-9b".to_string()));
+        let lr = LastRoute::capture(
+            &d,
+            ThinkingMode::Auto,
+            Effort::High,
+            ModelSelection::Auto,
+            Some("ornith-1.5-9b".to_string()),
+        );
         assert_eq!(lr.thinking_mode, "auto");
         assert_eq!(lr.thinking_applied, "high");
         assert_eq!(lr.model_selection, "auto");
@@ -181,7 +187,13 @@ mod tests {
         ];
         d.uncertain = Some(true);
         d.prune_note = Some("disabled(uncertain)".to_string());
-        let lr = LastRoute::capture(&d, ThinkingMode::Auto, Effort::Medium, ModelSelection::Auto, None);
+        let lr = LastRoute::capture(
+            &d,
+            ThinkingMode::Auto,
+            Effort::Medium,
+            ModelSelection::Auto,
+            None,
+        );
         assert_eq!(lr.model_ranking, vec!["cheap-model", "big-model"]);
         assert!(lr.uncertain);
         assert_eq!(lr.prune_note.as_deref(), Some("disabled(uncertain)"));
@@ -206,8 +218,7 @@ mod tests {
             None,
         );
         assert_eq!(lr.route_error.as_deref(), Some("router unreachable"));
-        let back: LastRoute =
-            serde_json::from_str(&serde_json::to_string(&lr).unwrap()).unwrap();
+        let back: LastRoute = serde_json::from_str(&serde_json::to_string(&lr).unwrap()).unwrap();
         assert_eq!(back.route_error.as_deref(), Some("router unreachable"));
         let old: LastRoute = serde_json::from_str(r#"{"ts":1,"tier":"balanced","routed_effort":"medium","thinking_applied":"medium","thinking_mode":"auto","model_selection":"pinned","model_advisory":null,"confidence":null,"source":"fail-open"}"#).unwrap();
         assert!(old.route_error.is_none());

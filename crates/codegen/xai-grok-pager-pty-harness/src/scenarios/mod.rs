@@ -52,6 +52,11 @@ pub enum Scenario {
 }
 
 impl Scenario {
+    /// Snake-case name via the `IntoStaticStr` derive.
+    pub fn as_str(&self) -> &'static str {
+        self.into()
+    }
+
     /// Every scenario, in dispatch order.
     pub const ALL: &'static [Scenario] = &[
         Scenario::ScrollStress,

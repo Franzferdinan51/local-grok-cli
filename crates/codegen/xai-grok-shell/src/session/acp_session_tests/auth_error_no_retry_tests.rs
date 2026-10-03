@@ -1,5 +1,6 @@
 use super::support::*;
 use super::*;
+use crate::session::SwitchContextWindow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
@@ -1489,16 +1490,7 @@ async fn model_switch_preserves_existing_conversation_group() {
             let mut incoming = actor.reconstruct_full_config().await;
             incoming.conversation_group_id = None;
             actor
-                .handle_set_session_model(crate::session::SessionModelSwitch {
-                    sampling_config: incoming,
-                    use_concise: false,
-                    is_family_switch: false,
-                    apply_prompt_override: false,
-                    skip_prompt_rewrite: true,
-                    auto_compact_threshold_percent: 85,
-                    system_prompt_label: xai_grok_agent::DEFAULT_SYSTEM_PROMPT_LABEL.to_owned(),
-                    effort_explicit: false,
-                })
+                .handle_set_session_model(config_only_model_switch(incoming))
                 .await
                 .expect("model switch succeeds");
 
@@ -1563,16 +1555,7 @@ async fn set_session_model_invalidates_byok_memo_for_same_model_id() {
                 ..Default::default()
             };
             let _ = actor
-                .handle_set_session_model(crate::session::SessionModelSwitch {
-                    sampling_config: cfg,
-                    use_concise: false,
-                    is_family_switch: false,
-                    apply_prompt_override: false,
-                    skip_prompt_rewrite: true,
-                    auto_compact_threshold_percent: 85,
-                    system_prompt_label: xai_grok_agent::DEFAULT_SYSTEM_PROMPT_LABEL.to_owned(),
-                    effort_explicit: false,
-                })
+                .handle_set_session_model(config_only_model_switch(cfg))
                 .await;
 
             let expected_max_retries = xai_grok_sampler::resolve_max_retries(Some(6));
@@ -1650,16 +1633,7 @@ async fn switch_to_first_party_model_drops_minted_provider_token() {
                 ..Default::default()
             };
             let _ = actor
-                .handle_set_session_model(crate::session::SessionModelSwitch {
-                    sampling_config: cfg,
-                    use_concise: false,
-                    is_family_switch: false,
-                    apply_prompt_override: false,
-                    skip_prompt_rewrite: true,
-                    auto_compact_threshold_percent: 85,
-                    system_prompt_label: xai_grok_agent::DEFAULT_SYSTEM_PROMPT_LABEL.to_owned(),
-                    effort_explicit: false,
-                })
+                .handle_set_session_model(config_only_model_switch(cfg))
                 .await;
 
             let creds = actor.chat_state_handle.get_credentials().await;
@@ -1674,6 +1648,24 @@ async fn switch_to_first_party_model_drops_minted_provider_token() {
 }
 
 /// Arm 4c: a 401 on a provider-backed model re-mints once and resubmits.
+/// A model switch that changes only the sampler config; everything else stays at the test default.
+fn config_only_model_switch(
+    sampling_config: xai_grok_sampler::SamplerConfig,
+) -> crate::session::SessionModelSwitch {
+    crate::session::SessionModelSwitch {
+        sampling_config,
+        use_concise: false,
+        is_family_switch: false,
+        apply_prompt_override: false,
+        skip_prompt_rewrite: true,
+        auto_compact_threshold_percent: 85,
+        system_prompt_label: xai_grok_agent::DEFAULT_SYSTEM_PROMPT_LABEL.to_owned(),
+        context_window_selection: SwitchContextWindow::Set(None),
+        supported_context_windows: Vec::new(),
+        effort_explicit: false,
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn sampler_401_on_provider_model_remints_and_resubmits() {
     let local = tokio::task::LocalSet::new();

@@ -156,10 +156,7 @@ mod tests {
         let d = DecideDecision {
             decision_type: DecideType::Choice,
             winner: "rewrite".to_string(),
-            distribution: vec![
-                ("rewrite".to_string(), 0.79),
-                ("keep".to_string(), 0.21),
-            ],
+            distribution: vec![("rewrite".to_string(), 0.79), ("keep".to_string(), 0.21)],
             confidence: 0.79,
             latency_ms: Some(3.1),
             backend: Some("decider".to_string()),
@@ -186,6 +183,9 @@ mod tests {
             assert_eq!(v["client"], serde_json::json!("grok-local"));
         }
         // Fail-open: an unwritable path degrades silently (no panic).
-        append_line_to(Path::new("/proc/definitely-not-here/records.jsonl"), &route_record(&route_fixture(), "turn"));
+        append_line_to(
+            Path::new("/proc/definitely-not-here/records.jsonl"),
+            &route_record(&route_fixture(), "turn"),
+        );
     }
 }

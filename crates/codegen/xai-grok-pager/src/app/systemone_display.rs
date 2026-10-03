@@ -160,10 +160,7 @@ mod tests {
         let mut cache = active_cache();
         cache.last_thinking_applied = Some("high".to_string());
         cache.last_route_error = Some("router unreachable".to_string());
-        assert_eq!(
-            render_suffixes(&cache),
-            " · think:auto→high · router:down"
-        );
+        assert_eq!(render_suffixes(&cache), " · think:auto→high · router:down");
     }
 
     #[test]

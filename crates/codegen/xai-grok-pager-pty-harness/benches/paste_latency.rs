@@ -106,6 +106,14 @@ enum Surface {
     #[strum(serialize = "all")]
     All,
 }
+
+impl Surface {
+    /// Display name via the `IntoStaticStr` derive.
+    fn as_str(&self) -> &'static str {
+        self.into()
+    }
+}
+
 /// Aggregated latency stats for one (surface, mode) cell.
 /// For `image` the primary p50/p95/max track the chip (end-to-end attach) latency.
 /// The burst responsiveness and chip p50s are also broken out explicitly.

@@ -226,8 +226,6 @@ impl ThinkingMode {
     }
 }
 
-
-
 /// The user's model-selection setting. Fully independent from
 /// [`ThinkingMode`]. `Pinned` means "use the session's active model" (the
 /// long-standing default behavior, first-class). `Auto` lets SystemOne pick
@@ -883,9 +881,7 @@ mod tests {
         payload: serde_json::Value,
     ) -> String {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!(
             "http://127.0.0.1:{}/v1/systemone/route",
             listener.local_addr().unwrap().port()
@@ -896,8 +892,7 @@ mod tests {
             let n = sock.read(&mut buf).await.unwrap();
             let text = String::from_utf8_lossy(&buf[..n]).into_owned();
             if let Some(body) = text.split("\r\n\r\n").nth(1) {
-                *seen.lock().await =
-                    serde_json::from_str(body.trim_end_matches('\0')).ok();
+                *seen.lock().await = serde_json::from_str(body.trim_end_matches('\0')).ok();
             }
             let body = serde_json::to_string(&payload).unwrap();
             let resp = format!(
