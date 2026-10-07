@@ -124,24 +124,24 @@ SPEED_DEFAULTS = {
     "executor_effort": "low",
     "tier_models": {},
     # Per-tier loop caps consumed by _grok_one_shot (max_turns) and
-    # _ralph_run (ralph_cap). Values mirror the pre-existing loop bounds:
-    # one-shot max_turns defaulted to 4, ralph iterations to 10 and
-    # per-iteration turns to 8 -- low gets a small cap, medium a moderate
-    # one, high a generous one. A plain effort string ("low"|"medium"|"high")
-    # is still accepted for backward compat with v0.5.x configs and maps to
-    # the canonical caps for that effort (see _EFFORT_CANONICAL).
+    # _ralph_run (ralph_cap). Deliberately very high: agentic loops burn a
+    # turn per tool round-trip, so tight caps abort long tasks before they
+    # converge. Explicit caller values always win. A plain effort string
+    # ("low"|"medium"|"high") is still accepted for backward compat with
+    # v0.5.x configs and maps to the canonical caps for that effort
+    # (see _EFFORT_CANONICAL).
     "tier_efforts": {
-        "edge": {"effort": "low", "max_turns": 4, "ralph_cap": 4},
-        "economy": {"effort": "low", "max_turns": 4, "ralph_cap": 4},
-        "balanced": {"effort": "medium", "max_turns": 6, "ralph_cap": 8},
-        "heavy": {"effort": "high", "max_turns": 10, "ralph_cap": 12},
+        "edge": {"effort": "low", "max_turns": 100000, "ralph_cap": 100000},
+        "economy": {"effort": "low", "max_turns": 100000, "ralph_cap": 100000},
+        "balanced": {"effort": "medium", "max_turns": 100000, "ralph_cap": 100000},
+        "heavy": {"effort": "high", "max_turns": 100000, "ralph_cap": 100000},
     },
     # REMOVED 2026-09-26: there is no model-switch path anymore. The
     # standing no-unload rule — never unload a model the user loaded
     # themselves — is enforced structurally: the adapter has no
     # load/unload code path at all.
     "default_mcp_servers": "auto",
-    "ralph_max_iterations": 10,
+    "ralph_max_iterations": 100000,
     "ralph_done_marker": "DONE",
     "ralph_progress_dir": str(GROK_LOCAL_HOME / "ralph"),
     "transcript_dir": str(GROK_LOCAL_HOME / "transcripts"),
@@ -334,9 +334,9 @@ def _pick_local_model(tier, model_id):
 # Canonical caps per reasoning effort. tier_efforts entries may be a plain
 # effort string (legacy) or a dict overriding any of these fields.
 _EFFORT_CANONICAL = {
-    "low": {"effort": "low", "max_turns": 4, "ralph_cap": 4},
-    "medium": {"effort": "medium", "max_turns": 6, "ralph_cap": 8},
-    "high": {"effort": "high", "max_turns": 10, "ralph_cap": 12},
+    "low": {"effort": "low", "max_turns": 100000, "ralph_cap": 100000},
+    "medium": {"effort": "medium", "max_turns": 100000, "ralph_cap": 100000},
+    "high": {"effort": "high", "max_turns": 100000, "ralph_cap": 100000},
 }
 
 # Heuristic: keyword overlap between task text/task_labels and configured
@@ -665,7 +665,7 @@ def _grok_one_shot(prompt, cwd, effort="auto", timeout=300, max_turns=None,
         if permission_mode is None:
             permission_mode = route.get("permission_mode")
     if max_turns is None:
-        max_turns = 4  # legacy bound for explicit-effort calls
+        max_turns = 100000  # effectively unbounded for explicit-effort calls
     if permission_mode is None:
         permission_mode = cfg.get("permission_mode_default", "auto")
     if not isinstance(cwd, str) or not os.path.isdir(cwd):
@@ -818,7 +818,7 @@ def _ralph_run(args):
         raise ValueError("cwd must be an existing directory")
     route = systemone_route(task, kind="ralph")
     max_iterations = int(args.get("max_iterations") or route.get("ralph_cap")
-                         or cfg.get("ralph_max_iterations", 10))
+                         or cfg.get("ralph_max_iterations", 100000))
     done_marker = args.get("done_marker", cfg.get("ralph_done_marker", "DONE"))
     test_command = args.get("test_command")
     progress_dir = args.get("progress_dir", cfg.get("ralph_progress_dir"))
@@ -831,7 +831,7 @@ def _ralph_run(args):
                     % (task.strip(), time.strftime("%Y-%m-%d %H:%M:%S")))
     effort = route.get("effort") or cfg.get("default_effort", "high")
     timeout = int(args.get("timeout", 300))
-    max_turns = int(args.get("max_turns") or route.get("max_turns") or 8)
+    max_turns = int(args.get("max_turns") or route.get("max_turns") or 100000)
     prev_output, stopped, last_output, it = None, "max_iterations", "", 0
     for it in range(1, max_iterations + 1):
         with open(progress_file) as f:
@@ -918,7 +918,7 @@ def _plan_then_execute(args):
             "Do not execute anything.\n\nTask: %s" % task.strip())
         plan = _grok_one_shot(plan_prompt, cwd, effort=cfg.get("planner_effort", "high"),
                               timeout=int(args.get("plan_timeout", 300)),
-                              max_turns=int(args.get("plan_max_turns", 6)), task_hint="plan")
+                              max_turns=int(args.get("plan_max_turns", 100000)), task_hint="plan")
     with open(plan_path, "w") as f:
         f.write("# Plan\n\nTask: %s\n\nPlanner effort: %s\n\n%s\n"
                 % (task.strip(), cfg.get("planner_effort", "high"), plan))
@@ -928,7 +928,7 @@ def _plan_then_execute(args):
                    "## Plan\n%s\n\n## Original task\n%s" % (plan, task.strip()))
     result = _grok_one_shot(exec_prompt, cwd, effort=exec_effort,
                             timeout=int(args.get("timeout", 600)),
-                            max_turns=int(args.get("max_turns", 10)), task_hint="execute")
+                            max_turns=int(args.get("max_turns", 100000)), task_hint="execute")
     planner_model = cfg.get("planner_model") or loaded
     out = {"task": task.strip(), "plan_path": plan_path, "plan": plan,
            "planner": {"model": planner_model, "effort": cfg.get("planner_effort", "high")},
@@ -1047,7 +1047,7 @@ MCP_SERVERS_PROP = {
 
 
 TOOLS = [
-    {"name": "grok_local_prompt", "description": "Run one bounded, headless Grok Local agent turn using its configured MCP servers and return the response. When effort='auto' (default), SystemOne picks the reasoning effort AND the max_turns cap; an explicit max_turns always wins.", "inputSchema": schema({"prompt": {"type": "string"}, "cwd": {"type": "string"}, "timeout": {"type": "integer", "minimum": 1, "maximum": MAX_TIMEOUT, "default": 300}, "max_turns": {"type": "integer", "minimum": 1, "maximum": 10, "description": "Per-turn agent loop cap. Unset: use the SystemOne tier's max_turns (fail-open: high tier = 10)."}, "permission_mode": {"type": "string", "default": "auto"}, "allow_subagents": {"type": "boolean", "default": False}, "allow_plan": {"type": "boolean", "default": False}, "effort": {"type": "string", "default": "auto", "description": "'auto' (default): ask SystemOne for the reasoning effort and loop caps (fail-open to config defaults); or none/low/medium/high/max, passed as --reasoning-effort."}}, ["prompt"])},
+    {"name": "grok_local_prompt", "description": "Run one bounded, headless Grok Local agent turn using its configured MCP servers and return the response. When effort='auto' (default), SystemOne picks the reasoning effort AND the max_turns cap; an explicit max_turns always wins.", "inputSchema": schema({"prompt": {"type": "string"}, "cwd": {"type": "string"}, "timeout": {"type": "integer", "minimum": 1, "maximum": MAX_TIMEOUT, "default": 300}, "max_turns": {"type": "integer", "minimum": 1, "maximum": 100000, "description": "Per-turn agent loop cap. Unset: use the SystemOne tier's max_turns (fail-open: high tier = 100000)."}, "permission_mode": {"type": "string", "default": "auto"}, "allow_subagents": {"type": "boolean", "default": False}, "allow_plan": {"type": "boolean", "default": False}, "effort": {"type": "string", "default": "auto", "description": "'auto' (default): ask SystemOne for the reasoning effort and loop caps (fail-open to config defaults); or none/low/medium/high/max, passed as --reasoning-effort."}}, ["prompt"])},
     {"name": "grok_local_status", "description": "Return installed Grok Local and ACP bridge status.", "inputSchema": schema()},
     {"name": "grok_local_models", "description": "List models available to Grok Local (read-only).", "inputSchema": schema()},
     {"name": "grok_local_sessions", "description": "List recent Grok Local sessions (read-only).", "inputSchema": schema()},
@@ -1066,8 +1066,8 @@ TOOLS = [
     {"name": "grok_local_systemone_route", "description": "Ask SystemOne for a model-tier/effort routing decision for a task (fail-open to config defaults).", "inputSchema": schema({"task": {"type": "string"}, "kind": {"type": "string", "default": "prompt"}, "session_id": {"type": "string"}}, ["task"])},
     {"name": "grok_local_lmstudio_models", "description": "List LM Studio's model library and which model is currently loaded (observational only; never loads/unloads).", "inputSchema": schema()},
     {"name": "grok_local_tools_batch", "description": "Run multiple INDEPENDENT tool calls concurrently; results return in input order. No ordering guarantees between calls -- do not batch calls that depend on each other's outputs, multiple prompts to the same session, or nested tools_batch.", "inputSchema": schema({"calls": {"type": "array", "description": "List of {tool, arguments} objects. Max 16 per batch.", "items": {"type": "object"}}}, ["calls"])},
-    {"name": "grok_local_ralph_run", "description": "Ralph loop: fresh one-shot iterations on a task sharing a progress file; stops on done_marker, a passing test_command, a stall (byte-identical output twice in a row), or the iteration cap. When max_iterations/max_turns are unset, SystemOne's ralph_cap/max_turns apply; explicit values always win.", "inputSchema": schema({"task": {"type": "string"}, "cwd": {"type": "string"}, "max_iterations": {"type": "integer", "description": "Iteration cap. Unset: SystemOne tier ralph_cap (fail-open: high tier = 12)."}, "done_marker": {"type": "string", "default": "DONE"}, "test_command": {"type": "string"}, "progress_file": {"type": "string"}, "timeout": {"type": "integer", "default": 300}, "max_turns": {"type": "integer", "description": "Per-iteration turn cap. Unset: SystemOne tier max_turns."}}, ["task"])},
-    {"name": "grok_local_plan_then_execute", "description": "Plan-then-execute: a high-effort planner writes a plan artifact, then a fast executor runs it. Both roles use the loaded local LM Studio model; nothing is loaded or unloaded. Accepts optional candidate_plans (2+ plan texts) which are ranked via SystemOne; the winning plan is executed (fail-open: original-first).", "inputSchema": schema({"task": {"type": "string"}, "cwd": {"type": "string"}, "plan_path": {"type": "string"}, "timeout": {"type": "integer", "default": 600}, "max_turns": {"type": "integer", "default": 10}, "candidate_plans": {"type": "array", "description": "Optional 2+ candidate plan texts to rank; the winner is executed.", "items": {"type": "string"}}}, ["task"])},
+    {"name": "grok_local_ralph_run", "description": "Ralph loop: fresh one-shot iterations on a task sharing a progress file; stops on done_marker, a passing test_command, a stall (byte-identical output twice in a row), or the iteration cap. When max_iterations/max_turns are unset, SystemOne's ralph_cap/max_turns apply; explicit values always win.", "inputSchema": schema({"task": {"type": "string"}, "cwd": {"type": "string"}, "max_iterations": {"type": "integer", "description": "Iteration cap. Unset: SystemOne tier ralph_cap (fail-open: high tier = 100000)."}, "done_marker": {"type": "string", "default": "DONE"}, "test_command": {"type": "string"}, "progress_file": {"type": "string"}, "timeout": {"type": "integer", "default": 300}, "max_turns": {"type": "integer", "description": "Per-iteration turn cap. Unset: SystemOne tier max_turns."}}, ["task"])},
+    {"name": "grok_local_plan_then_execute", "description": "Plan-then-execute: a high-effort planner writes a plan artifact, then a fast executor runs it. Both roles use the loaded local LM Studio model; nothing is loaded or unloaded. Accepts optional candidate_plans (2+ plan texts) which are ranked via SystemOne; the winning plan is executed (fail-open: original-first).", "inputSchema": schema({"task": {"type": "string"}, "cwd": {"type": "string"}, "plan_path": {"type": "string"}, "timeout": {"type": "integer", "default": 600}, "max_turns": {"type": "integer", "default": 100000}, "candidate_plans": {"type": "array", "description": "Optional 2+ candidate plan texts to rank; the winner is executed.", "items": {"type": "string"}}}, ["task"])},
     {"name": "grok_local_rank_plans", "description": "Rank 2+ candidate plans via SystemOne POST /v1/systemone/rank-plans. Returns {winner_index, rankings} with scores plus fail-open detail. On any error the winner is 0 and every ranking carries score null (input order preserved).", "inputSchema": schema({"task": {"type": "string"}, "plans": {"type": "array", "description": "Candidate plans, each {id, text}; ids must be unique.", "items": {"type": "object"}}}, ["task", "plans"])},
     {"name": "grok_local_compact_session", "description": "Anchored compaction of the adapter-side transcript: archives the full transcript to ~/.grok-local/transcripts/<session>.jsonl first, then replaces it with a summary preserving permission decisions, file paths touched, and errors.", "inputSchema": schema({"session_id": {"type": "string"}})},
     {"name": "grok_local_slash_verify", "description": "/verify: run build then test commands in the session cwd (auto-detected from package.json/Makefile/pyproject when omitted); returns pass/fail plus output tails.", "inputSchema": schema({"session_id": {"type": "string"}, "cwd": {"type": "string"}, "build_command": {"type": "string"}, "test_command": {"type": "string"}, "timeout": {"type": "integer", "default": 300}})},

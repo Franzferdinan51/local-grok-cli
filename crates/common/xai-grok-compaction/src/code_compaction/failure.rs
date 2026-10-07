@@ -13,11 +13,14 @@ pub fn is_context_length_error(message: &str) -> bool {
         || m.contains("prompt is too long")
         || m.contains("maximum prompt length")
         || m.contains("maximum context length")
+        // LM Studio engine-protocol wording.
+        || m.contains("exceeds the context window")
         // Provider request-body byte caps.
         || m.contains("maximum allowed number of bytes")
         || (m.contains("current message") && m.contains("exceeds budget"))
         || is_anchored(&m, "request too large")
         || has_size_slug(&m)
+        || has_json_envelope_code(&m)
         || has_rendered_413_phrase(&m)
         || has_input_length_pair(&m)
 }
@@ -39,6 +42,24 @@ fn has_size_slug(m: &str) -> bool {
     ]
     .iter()
     .any(|slug| is_anchored(m, slug))
+}
+
+/// Size slugs in a JSON error envelope's `"code"` slot
+/// (`{"error":{"message":"...","code":"context_length_exceeded"}}`), possibly
+/// embedded in backend wrapper text (LM Studio engine protocol). The
+/// `"code":` prefix is a rendered-code position like the `": "` anchor, so
+/// echoed prose still doesn't match.
+fn has_json_envelope_code(m: &str) -> bool {
+    [
+        "context_length_exceeded",
+        "exceed_context_size_error",
+        "payload_too_large",
+        "request_too_large",
+    ]
+    .iter()
+    .any(|slug| {
+        m.contains(&format!("\"code\":\"{slug}\"")) || m.contains(&format!("\"code\": \"{slug}\""))
+    })
 }
 
 /// A 413 reason phrase directly after its status code — how HTTP statuses
@@ -89,6 +110,12 @@ mod tests {
             "compact failed: 413: Request too large",
             "API error (status 429 Too Many Requests): Request too large for model",
             "request_too_large: request rejected",
+            // Fleet-observed LM Studio overflow: engine-protocol wrapper
+            // around an OpenAI-style envelope; neither the message wording
+            // nor the code slug is ": "-anchored.
+            "stream error (unknown): Engine protocol predict request returned 400: {\"error\":{\"message\":\"prompt exceeds the context window\",\"type\":\"invalid_request_error\",\"code\":\"context_length_exceeded\"}}",
+            "prompt exceeds the context window",
+            "{\"error\":{\"message\":\"overflow\",\"code\": \"context_length_exceeded\"}}",
         ] {
             assert!(is_context_length_error(msg), "should match: {msg}");
         }
@@ -107,10 +134,12 @@ mod tests {
             "invalid_request_error: user note says the payload too large banner is confusing",
             "invalid_request_error: field description mentions a content too large warning",
             "invalid_request_error: docs mention a request entity too large response",
-            // Slugs echoed mid-prose (not at start / after ": ").
+            // Slugs echoed mid-prose (not at start / after ": ", and not
+            // in a JSON "code" slot).
             "invalid_request_error: user asked what context_length_exceeded means",
             "invalid_request_error: docs mention the payload_too_large code",
             "invalid_request_error: docs mention the request_too_large code",
+            "invalid_request_error: user note says the code context_length_exceeded is confusing",
             // A stray digit run next to an echoed phrase, but not the
             // rendered "413 <reason phrase>" adjacency.
             "invalid_request_error: line 413 of the doc mentions payload too large limits",

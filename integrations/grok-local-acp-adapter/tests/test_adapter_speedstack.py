@@ -97,33 +97,33 @@ class SpeedStackTest(unittest.TestCase):
     # --- A1: effort map -------------------------------------------------
     def test_tier_caps_defaults(self):
         self.assertEqual(mod._tier_caps("economy", self.cfg),
-                         {"effort": "low", "max_turns": 4, "ralph_cap": 4})
+                         {"effort": "low", "max_turns": 100000, "ralph_cap": 100000})
         self.assertEqual(mod._tier_caps("edge", self.cfg),
-                         {"effort": "low", "max_turns": 4, "ralph_cap": 4})
+                         {"effort": "low", "max_turns": 100000, "ralph_cap": 100000})
         self.assertEqual(mod._tier_caps("balanced", self.cfg),
-                         {"effort": "medium", "max_turns": 6, "ralph_cap": 8})
+                         {"effort": "medium", "max_turns": 100000, "ralph_cap": 100000})
         self.assertEqual(mod._tier_caps("heavy", self.cfg),
-                         {"effort": "high", "max_turns": 10, "ralph_cap": 12})
+                         {"effort": "high", "max_turns": 100000, "ralph_cap": 100000})
 
     def test_tier_caps_legacy_string(self):
         cfg = copy.deepcopy(self.cfg)
         cfg["tier_efforts"] = {"economy": "low", "balanced": "medium", "heavy": "high"}
         self.assertEqual(mod._tier_caps("economy", cfg),
-                         {"effort": "low", "max_turns": 4, "ralph_cap": 4})
+                         {"effort": "low", "max_turns": 100000, "ralph_cap": 100000})
         self.assertEqual(mod._tier_caps("heavy", cfg),
-                         {"effort": "high", "max_turns": 10, "ralph_cap": 12})
+                         {"effort": "high", "max_turns": 100000, "ralph_cap": 100000})
 
     def test_tier_caps_unknown_tier_fail_open(self):
         self.assertEqual(mod._tier_caps("whatever", self.cfg),
-                         {"effort": "high", "max_turns": 10, "ralph_cap": 12})
+                         {"effort": "high", "max_turns": 100000, "ralph_cap": 100000})
         self.assertEqual(mod._tier_caps(None, self.cfg),
-                         {"effort": "high", "max_turns": 10, "ralph_cap": 12})
+                         {"effort": "high", "max_turns": 100000, "ralph_cap": 100000})
 
     def test_tier_caps_partial_override(self):
         cfg = copy.deepcopy(self.cfg)
         cfg["tier_efforts"]["economy"] = {"effort": "low", "max_turns": 5}
         self.assertEqual(mod._tier_caps("economy", cfg),
-                         {"effort": "low", "max_turns": 5, "ralph_cap": 4})
+                         {"effort": "low", "max_turns": 5, "ralph_cap": 100000})
 
     # --- fail-open -------------------------------------------------------
     def test_fail_open_shim_down(self):
@@ -133,8 +133,8 @@ class SpeedStackTest(unittest.TestCase):
             d = mod.systemone_route("do a thing")
         self.assertEqual(d["source"], "fail-open")
         self.assertEqual(d["effort"], "high")
-        self.assertEqual(d["max_turns"], 10)      # high tier caps
-        self.assertEqual(d["ralph_cap"], 12)
+        self.assertEqual(d["max_turns"], 100000)      # high tier caps
+        self.assertEqual(d["ralph_cap"], 100000)
         self.assertEqual(d["task_labels"], [])
         self.assertEqual(d["suggested_mcp_servers"], [])
         self.assertIn("Advisory only", d["suggestion_note"])
@@ -176,23 +176,23 @@ class SpeedStackTest(unittest.TestCase):
         self.assertEqual(d["source"], "systemone")
         self.assertEqual(d["tier"], "economy")
         self.assertEqual(d["effort"], "high")      # explicit shim effort wins
-        self.assertEqual(d["max_turns"], 10)
-        self.assertEqual(d["ralph_cap"], 12)
+        self.assertEqual(d["max_turns"], 100000)
+        self.assertEqual(d["ralph_cap"], 100000)
         self.assertEqual(d["task_labels"], ["git", "ci"])
 
     def test_old_shim_derives_locally(self):
         with self._shim({"tier": "balanced", "model_id": "ornith-1.5-9b"}):
             d = mod.systemone_route("refactor the auth module")
         self.assertEqual(d["effort"], "medium")   # derived from tier
-        self.assertEqual(d["max_turns"], 6)
-        self.assertEqual(d["ralph_cap"], 8)
+        self.assertEqual(d["max_turns"], 100000)
+        self.assertEqual(d["ralph_cap"], 100000)
         self.assertEqual(d["task_labels"], [])
 
     def test_shim_bad_effort_ignored(self):
         with self._shim({"tier": "heavy", "effort": "ultra"}):
             d = mod.systemone_route("big task")
         self.assertEqual(d["effort"], "high")      # tier-derived fallback
-        self.assertEqual(d["max_turns"], 10)
+        self.assertEqual(d["max_turns"], 100000)
 
     # --- A2: no model switching, no hard-coded ids --------------------------
     def test_model_switch_path_removed(self):

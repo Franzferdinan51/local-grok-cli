@@ -42,7 +42,7 @@ TOOLS = [
                 "prompt": {"type": "string", "description": "Task or question for Grok Local."},
                 "cwd": {"type": "string", "description": "Working directory; defaults to GROK_ADAPTER_CWD or the home directory."},
                 "timeout": {"type": "integer", "minimum": 1, "maximum": MAX_TIMEOUT, "default": 300},
-                "max_turns": {"type": "integer", "minimum": 1, "maximum": 10, "default": 4},
+                "max_turns": {"type": "integer", "minimum": 1, "maximum": 100000, "default": 100000},
             },
             "required": ["prompt"],
         },
@@ -74,11 +74,11 @@ def grok_prompt(args):
     if not isinstance(cwd, str) or not cwd or not os.path.isdir(cwd):
         raise ValueError("cwd must be an existing directory")
     timeout = int(args.get("timeout", 300))
-    turns = int(args.get("max_turns", 4))
+    turns = int(args.get("max_turns", 100000))
     if not 1 <= timeout <= MAX_TIMEOUT:
         raise ValueError(f"timeout must be between 1 and {MAX_TIMEOUT} seconds")
-    if not 1 <= turns <= 10:
-        raise ValueError("max_turns must be between 1 and 10")
+    if not 1 <= turns <= 100000:
+        raise ValueError("max_turns must be between 1 and 100000")
     cmd = [GROK, "--single", prompt, "--output-format", "plain", "--max-turns", str(turns), "--permission-mode", "auto", "--no-subagents", "--no-plan"]
     env = os.environ.copy()
     extra = {}

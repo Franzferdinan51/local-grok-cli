@@ -965,6 +965,28 @@ mod tests {
     }
 
     #[test]
+    fn lm_studio_context_overflow_stream_error_is_fatal() {
+        // Fleet-observed LM Studio shape: an engine-protocol wrapper around an
+        // OpenAI-style envelope, surfaced as an unparsed ("unknown") stream
+        // error. Neither the message wording nor the code slug is ": "-anchored,
+        // but it must still fail fast so the turn can compact-and-resubmit
+        // instead of burning the retry budget re-sending the same payload.
+        let err = SamplingError::StreamError {
+            error_type: "unknown".into(),
+            message: "Engine protocol predict request returned 400: {\"error\":{\"message\":\"prompt exceeds the context window\",\"type\":\"invalid_request_error\",\"code\":\"context_length_exceeded\"}}".into(),
+            code: None,
+        };
+        assert!(
+            err.is_retry_vetoed(),
+            "LM Studio overflow must veto retries"
+        );
+        assert!(matches!(
+            classify_error(&err, 0, 15, RATE_LIMIT_RETRY_THRESHOLD),
+            RetryDecision::Fatal(_)
+        ));
+    }
+
+    #[test]
     fn byte_size_coded_errors_get_image_strip_before_the_veto() {
         // Byte-size codes get the 413 remedy: strip images and retry once; the caller upgrades to Fatal when nothing is left to strip
         for code in ["413", "payload_too_large", "request_too_large"] {

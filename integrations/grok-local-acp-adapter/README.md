@@ -63,16 +63,17 @@ tier_models = {}             # optional explicit tier→library-id map; the
                              # loaded model is always acceptable and never
                              # touched (adapter has no load/unload path)
 default_mcp_servers = "auto"   # or a list of [mcp_servers.*] names
-ralph_max_iterations = 10
+ralph_max_iterations = 100000
 ralph_done_marker = "DONE"
 ```
 
 Tier mapping (code defaults, overridable in config): SystemOne
-`edge`/`economy` → effort `low` (max_turns 4, ralph_cap 4),
-`balanced` → `medium` (6, 8), `heavy` → `high` (10, 12). A plain effort
-string per tier (e.g. `economy = "low"`) is still accepted for backward
-compat and maps to that effort's canonical caps. Fail-open (shim down)
-uses the `high` tier's caps.
+`edge`/`economy` → effort `low`, `balanced` → `medium`,
+`heavy` → `high`, all with max_turns 100000 and ralph_cap 100000
+(deliberately very high so long tasks converge; explicit values always
+win). A plain effort string per tier (e.g. `economy = "low"`) is still
+accepted for backward compat and maps to that effort's canonical caps.
+Fail-open (shim down) uses the `high` tier's caps.
 No model ids are hard-coded anywhere: tier picks resolve against the live
 LM Studio library, and the currently loaded model is always acceptable —
 the adapter never loads or unloads models (no load/unload path exists).

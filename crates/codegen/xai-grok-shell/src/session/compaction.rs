@@ -2154,6 +2154,34 @@ impl SessionActor {
         }
         self.estimate_exceeds_error_context_window(err).await
     }
+    /// Context window to compact against after a sampling failure, if any.
+    ///
+    /// Prefers the server-reported window (`should_compact_on_error`: the
+    /// estimate exceeds the error's `model_metadata.context_window`). Falls
+    /// back to the session window when the error text alone proves an
+    /// overflow: local backends such as LM Studio report no model metadata,
+    /// and the token estimate is known to undercount dense tool output, so
+    /// the server's verdict wins over the estimate here.
+    pub(crate) async fn overflow_context_window(
+        &self,
+        err: &xai_grok_sampler::SamplingErrorInfo,
+    ) -> Option<u64> {
+        if self.should_compact_on_error(err).await {
+            // `should_compact_on_error` is true only with
+            // `model_metadata.context_window` Some(>0).
+            return err.model_metadata.as_ref().and_then(|m| m.context_window);
+        }
+        if self.compaction.is_suppressed() {
+            return None;
+        }
+        if !xai_grok_sampling_types::is_context_length_error(&err.message) {
+            return None;
+        }
+        self.chat_state_handle
+            .get_sampling_config()
+            .await
+            .map(|c| c.context_window.get())
+    }
     /// The request's token estimate exceeds the failed response's reported context window.
     /// This probable-overflow signal is shared by compact-and-resubmit and the mid-salvage truncated-complete arm.
     /// The latter must see overflows even while compaction is suppressed.
