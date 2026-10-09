@@ -539,7 +539,7 @@ pub async fn route_for_task(task: &str, kind: &str, cfg: &SystemOneConfig) -> Ro
         crate::records::record_route_decision(&decision, kind);
         return decision;
     }
-    let body = route_request_body(task, kind, cfg.cost_bias.as_deref());
+    let body = route_request_body(task, kind, cfg.cost_bias.as_deref(), Some(cfg.decision_model.as_str()));
 
     // Localhost-only router client: the grok TLS policy is for remote hosts.
     #[allow(clippy::disallowed_methods)]
@@ -599,7 +599,7 @@ pub async fn route_for_task(task: &str, kind: &str, cfg: &SystemOneConfig) -> Ro
 /// caller configured one (`economy|balanced|quality`; anything else is
 /// dropped so the shim default applies). Extra keys are ignored by old and
 /// new shims alike, so this shape works against every shim version.
-pub fn route_request_body(task: &str, kind: &str, cost_bias: Option<&str>) -> serde_json::Value {
+pub fn route_request_body(task: &str, kind: &str, cost_bias: Option<&str>, decision_model: Option<&str>) -> serde_json::Value {
     let task_snippet: String = task.chars().take(500).collect();
     let mut body = serde_json::json!({
         "task": task_snippet,
@@ -609,6 +609,8 @@ pub fn route_request_body(task: &str, kind: &str, cost_bias: Option<&str>) -> se
     if let Some(bias) = cost_bias.and_then(crate::config::normalize_cost_bias) {
         body["cost_bias"] = serde_json::Value::String(bias);
     }
+    let dm = decision_model.unwrap_or(DEFAULT_DECISION_MODEL);
+    body["model"] = serde_json::Value::String(dm.to_string());
     body
 }
 
@@ -868,17 +870,19 @@ mod tests {
 
     #[test]
     fn route_request_body_shape_and_cost_bias() {
-        let plain = route_request_body("do a thing", "prompt", None);
+        let plain = route_request_body("do a thing", "prompt", None, None);
         assert_eq!(plain["task"], "do a thing");
         assert_eq!(plain["kind"], "prompt");
         assert_eq!(plain["client"], "grok-local");
         assert!(plain.get("cost_bias").is_none());
+        assert_eq!(plain["model"], "d1-3b");
 
-        let biased = route_request_body("x", "turn", Some("QUALITY"));
+        let biased = route_request_body("x", "turn", Some("QUALITY"), Some("d1-omni-600m"));
         assert_eq!(biased["cost_bias"], "quality");
+        assert_eq!(biased["model"], "d1-omni-600m");
 
         // Invalid bias is dropped (shim default applies), task truncated.
-        let bad = route_request_body(&"y".repeat(600), "turn", Some("turbo"));
+        let bad = route_request_body(&"y".repeat(600), "turn", Some("turbo"), None);
         assert!(bad.get("cost_bias").is_none());
         assert_eq!(bad["task"].as_str().unwrap().chars().count(), 500);
     }
