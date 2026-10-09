@@ -86,6 +86,12 @@ pub struct SystemOneConfig {
     /// `None` omits the key and the shim defaults to `balanced`.
     /// Env: `GROK_LOCAL_SYSTEMONE_COST_BIAS`; config file: `cost_bias`.
     pub cost_bias: Option<String>,
+    /// Decision model for the SystemOne routing layer (D1 team).
+    /// D1 handles routing decisions; the main model executes.
+    /// Env: SYSTEMONE_DECISION_MODEL; config: decision_model.
+    pub decision_model: String,
+    /// Fast fallback decision model. Env: SYSTEMONE_FAST_DECISION_MODEL.
+    pub fast_decision_model: String,
 }
 
 impl Default for SystemOneConfig {
@@ -104,6 +110,8 @@ impl Default for SystemOneConfig {
             model_selection: ModelSelection::Pinned,
             jeff1_enabled: true,
             cost_bias: None,
+            decision_model: crate::route::DEFAULT_DECISION_MODEL.to_string(),
+            fast_decision_model: crate::route::DEFAULT_FAST_MODEL.to_string(),
         }
     }
 }
@@ -282,6 +290,14 @@ impl SystemOneConfig {
         {
             self.cost_bias = Some(bias);
         }
+        if let Some(m) = get("decision_model").and_then(toml::Value::as_str) {
+            let m = m.trim();
+            if !m.is_empty() { self.decision_model = m.to_string(); }
+        }
+        if let Some(m) = get("fast_decision_model").and_then(toml::Value::as_str) {
+            let m = m.trim();
+            if !m.is_empty() { self.fast_decision_model = m.to_string(); }
+        }
     }
 
     fn apply_env(&mut self) {
@@ -337,6 +353,14 @@ impl SystemOneConfig {
             && let Some(bias) = normalize_cost_bias(&raw)
         {
             self.cost_bias = Some(bias);
+        }
+        if let Ok(m) = std::env::var("SYSTEMONE_DECISION_MODEL") {
+            let m = m.trim();
+            if !m.is_empty() { self.decision_model = m.to_string(); }
+        }
+        if let Ok(m) = std::env::var("SYSTEMONE_FAST_DECISION_MODEL") {
+            let m = m.trim();
+            if !m.is_empty() { self.fast_decision_model = m.to_string(); }
         }
     }
 }
@@ -401,6 +425,9 @@ mod tests {
         // Jeff-1 second head on by default; the :8079 sidecar is never a
         // route fallback (it serves typed decisions, not /v1/systemone/route).
         assert!(cfg.jeff1_enabled);
+        // D1 team: decision layer defaults to d1-3b, fast fallback d1-omni-600m.
+        assert_eq!(cfg.decision_model, "d1-3b");
+        assert_eq!(cfg.fast_decision_model, "d1-omni-600m");
     }
 
     #[test]
