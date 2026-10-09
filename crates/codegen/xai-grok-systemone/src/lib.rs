@@ -82,7 +82,7 @@ pub use decide::{
 };
 pub use records::{record_decide_decision, record_route_decision};
 pub use route::{
-    Effort, ModelSelection, PlanInput, PlanRanking, RankedModel, RankedTool, RouteDecision,
+    DEFAULT_DECISION_MODEL, DEFAULT_FAST_MODEL, Effort, ModelSelection, PlanInput, PlanRanking, RankedModel, RankedTool, RouteDecision,
     RouteSource, SecondOpinion, ThinkingMode, Tier, rank_plans, route_for_task,
 };
 pub use shim::{RouterStatus, ensure_router};

@@ -141,19 +141,19 @@ mod tests {
     #[test]
     fn capture_round_trips() {
         let mut d = RouteDecision::fail_open(&SystemOneConfig::default(), None);
-        d.model_id = Some("ornith-1.5-9b".to_string());
+        d.model_id = Some("d1-3b".to_string());
         let lr = LastRoute::capture(
             &d,
             ThinkingMode::Auto,
             Effort::High,
             ModelSelection::Auto,
-            Some("ornith-1.5-9b".to_string()),
+            Some("d1-3b".to_string()),
         );
         assert_eq!(lr.thinking_mode, "auto");
         assert_eq!(lr.thinking_applied, "high");
         assert_eq!(lr.model_selection, "auto");
-        assert_eq!(lr.model_advisory.as_deref(), Some("ornith-1.5-9b"));
-        assert_eq!(lr.model_selected.as_deref(), Some("ornith-1.5-9b"));
+        assert_eq!(lr.model_advisory.as_deref(), Some("d1-3b"));
+        assert_eq!(lr.model_selected.as_deref(), Some("d1-3b"));
         assert!(lr.second_opinion.is_none());
         let text = serde_json::to_string(&lr).unwrap();
         let back: LastRoute = serde_json::from_str(&text).unwrap();

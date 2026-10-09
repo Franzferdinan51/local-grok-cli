@@ -56,6 +56,13 @@ use std::time::Duration;
 use crate::config::SystemOneConfig;
 use crate::shim::RouterStatus;
 
+/// Default decision model: D1 3B - primary decision model for
+/// SystemOne routing. Used automatically when the router does not specify one.
+pub const DEFAULT_DECISION_MODEL: &str = "d1-3b";
+/// Fast fallback decision model: D1 Omni 600M - lightweight alternative
+/// for latency-sensitive routing decisions.
+pub const DEFAULT_FAST_MODEL: &str = "d1-omni-600m";
+
 /// SystemOne cost tier returned by the router.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tier {
@@ -997,14 +1004,14 @@ mod tests {
         let mut d = RouteDecision::fail_open(&SystemOneConfig::default(), None);
         let payload = serde_json::json!({
             "route": {"tier": "heavy", "effort": "low", "confidence": 0.9},
-            "model": "ornith-1.5-9b",
+            "model": "d1-3b",
         });
         apply_route_payload(&mut d, &payload);
         assert_eq!(d.tier, Some(Tier::Heavy));
         assert_eq!(d.effort, Effort::Low);
         assert_eq!(d.max_turns, 100_000);
         assert_eq!(d.confidence, Some(0.9));
-        assert_eq!(d.model_id.as_deref(), Some("ornith-1.5-9b"));
+        assert_eq!(d.model_id.as_deref(), Some("d1-3b"));
     }
 
     #[test]
@@ -1030,11 +1037,11 @@ mod tests {
     fn route_model_id_prefers_route_field() {
         let mut d = RouteDecision::fail_open(&SystemOneConfig::default(), None);
         let payload = serde_json::json!({
-            "route": {"tier": "balanced", "model_id": "ornith-1.5-35b-a3b"},
+            "route": {"tier": "balanced", "model_id": "d1-3b"},
             "model": "other",
         });
         apply_route_payload(&mut d, &payload);
-        assert_eq!(d.model_id.as_deref(), Some("ornith-1.5-35b-a3b"));
+        assert_eq!(d.model_id.as_deref(), Some("d1-3b"));
         assert_eq!(d.effort, Effort::Medium);
         assert_eq!(d.max_turns, 100_000);
     }
