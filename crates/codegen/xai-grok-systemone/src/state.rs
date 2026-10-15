@@ -16,7 +16,9 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::route::{Effort, ModelSelection, RouteDecision, SecondOpinion, ThinkingMode};
+use crate::route::{
+    D1Decision, Effort, ModelSelection, RouteDecision, SecondOpinion, ThinkingMode,
+};
 
 fn state_path() -> PathBuf {
     xai_dirs::grok_home().join("systemone-last-route.json")
@@ -47,6 +49,11 @@ pub struct LastRoute {
     /// from the historical `jeff1_second_opinion` wire key; advisory only).
     #[serde(default)]
     pub second_opinion: Option<SecondOpinion>,
+    /// The D1 decision model's route decision, when the shim sent one
+    /// (`d1_decision` wire key). Authoritative when present: D1 made
+    /// the tier call and the shim applied it.
+    #[serde(default)]
+    pub d1_decision: Option<D1Decision>,
     pub confidence: Option<f64>,
     pub source: String,
     /// Shim's best-value model ranking (top ids, expected-utility order).
@@ -89,6 +96,7 @@ impl LastRoute {
             model_advisory: decision.model_id.clone(),
             model_selected,
             second_opinion: decision.second_opinion.clone(),
+            d1_decision: decision.d1_decision.clone(),
             confidence: decision.confidence,
             source: decision.source.as_str().to_string(),
             model_ranking: decision

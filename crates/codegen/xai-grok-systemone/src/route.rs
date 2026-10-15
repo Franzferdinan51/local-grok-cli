@@ -334,6 +334,26 @@ pub struct SecondOpinion {
     pub rationale: String,
 }
 
+/// The D1 decision model's own route call, parsed from the shim's
+/// `d1_decision` wire key.
+///
+/// Authoritative: when the shim reports it, a D1 decision model
+/// (d1-3b / d1-omni-600m, served by LM Studio) made the tier decision
+/// and the shim applied it — the hybrid (rules + classifier) route
+/// only proposed. `applied` mirrors the wire flag: it is set when
+/// D1's pick replaced the hybrid tier.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct D1Decision {
+    /// The tier D1 chose.
+    pub tier: String,
+    /// D1's calibrated confidence in that tier (0..1 when reported).
+    pub confidence: Option<f64>,
+    /// The decision model that answered (e.g. "d1-3b").
+    pub model: String,
+    /// Whether the shim applied D1's tier as the routed tier.
+    pub applied: bool,
+}
+
 /// A candidate plan for [`rank_plans`].
 #[derive(Debug, Clone)]
 pub struct PlanInput {
@@ -395,6 +415,10 @@ pub struct RouteDecision {
     /// historical `jeff1_second_opinion` wire key. `None` on older shims or
     /// certain routes. Advisory only — never changes the routed tier.
     pub second_opinion: Option<SecondOpinion>,
+    /// The D1 decision model's route decision (`d1_decision` wire key).
+    /// `None` on older shims, or when LM Studio was unreachable and the
+    /// hybrid route stood. Authoritative when present — see [`D1Decision`].
+    pub d1_decision: Option<D1Decision>,
     /// Calibrated tier probabilities, probability desc.
     pub calibrated_probabilities: Vec<(String, f64)>,
     /// Diagnostic note about pruning (set by `suggest_and_maybe_prune`),
@@ -424,6 +448,7 @@ impl RouteDecision {
             ranked_tools: Vec::new(),
             ranked_models: Vec::new(),
             second_opinion: None,
+            d1_decision: None,
             calibrated_probabilities: Vec::new(),
             prune_note: None,
         }
@@ -509,6 +534,12 @@ impl RouteDecision {
         if let Some(op) = &self.second_opinion {
             let verdict = if op.agree { "agree" } else { "disagree" };
             parts.push(format!("second_opinion={}:{verdict}", op.tier));
+        }
+        // The D1 decision model's own call: when present, D1 made this
+        // tier decision — the visible proof the decision layer ran.
+        if let Some(d1) = &self.d1_decision {
+            let state = if d1.applied { "applied" } else { "noted" };
+            parts.push(format!("d1={}:{}:{}", d1.model, d1.tier, state));
         }
         if !self.suggested_mcp_servers.is_empty() {
             parts.push(format!(
@@ -745,6 +776,30 @@ fn apply_route_payload(decision: &mut RouteDecision, payload: &serde_json::Value
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("")
                     .to_string(),
+            })
+        });
+    // The D1 decision model's own route call (`d1_decision` wire key):
+    // when the shim reports it, D1 decided the tier and the shim
+    // applied it (subject to the deterministic-signals floor).
+    decision.d1_decision = route
+        .and_then(|r| r.get("d1_decision"))
+        .and_then(|o| {
+            let tier = o.get("tier")?.as_str()?;
+            Some(D1Decision {
+                tier: tier.to_string(),
+                confidence: o
+                    .get("confidence")
+                    .and_then(serde_json::Value::as_f64)
+                    .filter(|c| c.is_finite()),
+                model: o
+                    .get("model")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("d1-3b")
+                    .to_string(),
+                applied: o
+                    .get("applied")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
             })
         });
     decision.calibrated_probabilities = route
@@ -1314,6 +1369,41 @@ mod tests {
         // resolution is a pure function of thinking mode + decision.
         assert_eq!(ThinkingMode::Auto.resolve(&d), d.effort);
         assert_eq!(ModelSelection::default(), ModelSelection::Pinned);
+    }
+
+    /// The D1 decision model's own call is parsed from the `d1_decision`
+    /// wire key and surfaces in the evidence line as `d1=<model>:<tier>:
+    /// applied` — the visible proof the decision layer ran. Older shims
+    /// (no key) leave it `None`.
+    #[test]
+    fn d1_decision_parsed_and_surfaced() {
+        let mut d = RouteDecision::fail_open(&SystemOneConfig::default(), None);
+        let payload = serde_json::json!({
+            "route": {
+                "tier": "economy",
+                "d1_decision": {
+                    "tier": "economy",
+                    "confidence": 0.57,
+                    "probabilities": {"economy": 0.57, "balanced": 0.38, "heavy": 0.05},
+                    "model": "d1-3b",
+                    "applied": true,
+                },
+            },
+        });
+        apply_route_payload(&mut d, &payload);
+        let d1 = d.d1_decision.as_ref().expect("d1 decision parsed");
+        assert_eq!(d1.tier, "economy");
+        assert_eq!(d1.model, "d1-3b");
+        assert!(d1.applied);
+        assert!((d1.confidence.unwrap() - 0.57).abs() < 1e-9);
+        let line = d.evidence_line(RouterStatus::AlreadyRunning);
+        assert!(line.contains("d1=d1-3b:economy:applied"));
+        // Absent on older shims.
+        let plain = RouteDecision::fail_open(&SystemOneConfig::default(), None);
+        assert!(plain.d1_decision.is_none());
+        assert!(!plain
+            .evidence_line(RouterStatus::AlreadyRunning)
+            .contains("d1="));
     }
 
     /// The decider-backed second opinion is parsed from the historical

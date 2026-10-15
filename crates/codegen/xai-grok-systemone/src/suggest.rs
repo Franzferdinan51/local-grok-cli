@@ -294,6 +294,7 @@ mod tests {
             ranked_tools: Vec::new(),
             ranked_models: Vec::new(),
             second_opinion: None,
+            d1_decision: None,
             calibrated_probabilities: Vec::new(),
             prune_note: None,
         }
