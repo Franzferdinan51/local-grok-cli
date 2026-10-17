@@ -565,12 +565,22 @@ impl RouteDecision {
 /// returned decision is fail-open from config defaults. Never returns an
 /// error itself.
 pub async fn route_for_task(task: &str, kind: &str, cfg: &SystemOneConfig) -> RouteDecision {
+    route_for_task_with_tools(task, kind, cfg, &[]).await
+}
+
+/// Like [`route_for_task`], but the request carries the caller's tool
+/// inventory in the `scoring` object. That is what turns on the shim's
+/// calibrated decision surface (margin / uncertain / ranked_models /
+/// ranked_tools + tool_scoring, and the scored-route D1 tier review):
+/// without `scoring`, the shim answers with the legacy route shape and
+/// every downstream consumer of those fields runs on empty inputs.
+pub async fn route_for_task_with_tools(task: &str, kind: &str, cfg: &SystemOneConfig, scoring_tools: &[ScoringTool]) -> RouteDecision {
     if !cfg.routing_active() {
         let decision = RouteDecision::fail_open(cfg, Some("routing disabled".to_string()));
         crate::records::record_route_decision(&decision, kind);
         return decision;
     }
-    let body = route_request_body(task, kind, cfg.cost_bias.as_deref(), Some(cfg.decision_model.as_str()));
+    let body = route_request_body_with_scoring(task, kind, cfg.cost_bias.as_deref(), Some(cfg.decision_model.as_str()), scoring_tools);
 
     // Localhost-only router client: the grok TLS policy is for remote hosts.
     #[allow(clippy::disallowed_methods)]
@@ -630,7 +640,23 @@ pub async fn route_for_task(task: &str, kind: &str, cfg: &SystemOneConfig) -> Ro
 /// caller configured one (`economy|balanced|quality`; anything else is
 /// dropped so the shim default applies). Extra keys are ignored by old and
 /// new shims alike, so this shape works against every shim version.
+/// One tool in the caller's inventory, in the shim's `scoring.tools`
+/// shape. `id` is the tool's function name (built-ins) or MCP server
+/// name; `description` feeds the scorer's keyword recall.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ScoringTool {
+    pub id: String,
+    pub kind: String,
+    pub description: String,
+}
+
 pub fn route_request_body(task: &str, kind: &str, cost_bias: Option<&str>, decision_model: Option<&str>) -> serde_json::Value {
+    route_request_body_with_scoring(task, kind, cost_bias, decision_model, &[])
+}
+
+/// Like [`route_request_body`], plus the `scoring` object when the
+/// caller supplies a tool inventory (see [`route_for_task_with_tools`]).
+pub fn route_request_body_with_scoring(task: &str, kind: &str, cost_bias: Option<&str>, decision_model: Option<&str>, scoring_tools: &[ScoringTool]) -> serde_json::Value {
     let task_snippet: String = task.chars().take(500).collect();
     let mut body = serde_json::json!({
         "task": task_snippet,
@@ -642,6 +668,12 @@ pub fn route_request_body(task: &str, kind: &str, cost_bias: Option<&str>, decis
     }
     let dm = decision_model.unwrap_or(DEFAULT_DECISION_MODEL);
     body["model"] = serde_json::Value::String(dm.to_string());
+    if !scoring_tools.is_empty() {
+        body["scoring"] = serde_json::json!({
+            "calibration": serde_json::Value::Null,
+            "tools": scoring_tools,
+        });
+    }
     body
 }
 
@@ -940,6 +972,22 @@ mod tests {
         let bad = route_request_body(&"y".repeat(600), "turn", Some("turbo"), None);
         assert!(bad.get("cost_bias").is_none());
         assert_eq!(bad["task"].as_str().unwrap().chars().count(), 500);
+    }
+
+    #[test]
+    fn route_request_body_scoring_tools() {
+        let tools = vec![ScoringTool {
+            id: "bash".to_string(),
+            kind: "tool".to_string(),
+            description: "Run shell commands".to_string(),
+        }];
+        let body = route_request_body_with_scoring("do a thing", "prompt", None, None, &tools);
+        assert_eq!(body["scoring"]["tools"][0]["id"], "bash");
+        assert_eq!(body["scoring"]["tools"][0]["kind"], "tool");
+        assert!(body["scoring"]["calibration"].is_null());
+        // No inventory -> no scoring key (legacy shape, old shims fine).
+        let plain = route_request_body("do a thing", "prompt", None, None);
+        assert!(plain.get("scoring").is_none());
     }
 
     /// Serve one modern-shim `/v1/systemone/route` response on loopback,

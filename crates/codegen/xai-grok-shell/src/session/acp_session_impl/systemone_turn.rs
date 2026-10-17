@@ -106,7 +106,27 @@ impl super::SessionActor {
         }
         let thinking_mode: ThinkingMode = cfg.thinking;
         let model_selection: ModelSelection = cfg.model_selection;
-        let decision = xai_grok_systemone::route_for_task(&text, "turn", &cfg).await;
+        // Send the session's tool inventory with the route: without the
+        // `scoring` object the shim answers with the legacy shape (no
+        // ranked_tools / tool_scoring / ranked_models) and the decision
+        // surfaces downstream of the route run on empty inputs. Inventory
+        // = configured MCP servers + the tool descriptors the sampler
+        // most recently sent (cached by the agentflow turn state).
+        let mut scoring_tools = xai_grok_systemone::suggest::mcp_scoring_tools();
+        scoring_tools.extend(
+            self.agentflow_turn
+                .lock()
+                .last_tool_descriptors()
+                .into_iter()
+                .map(|(name, description)| xai_grok_systemone::route::ScoringTool {
+                    id: name,
+                    kind: "tool".to_string(),
+                    description,
+                }),
+        );
+        let decision =
+            xai_grok_systemone::route::route_for_task_with_tools(&text, "turn", &cfg, &scoring_tools)
+                .await;
         // Resolve the two independent controls. Thinking resolution is a pure
         // function of the mode + decision — model selection never influences
         // it, and thinking never influences model selection.

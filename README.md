@@ -58,7 +58,7 @@ version and the grok-build version that overlay was applied on.
 
 ```sh
 grok-local --version
-# grok-local 0.5.6 (<git sha>)
+# grok-local 0.5.7 (<git sha>)
 # grok-build 1.0.45 (<SOURCE_REV>)
 ```
 
@@ -230,9 +230,12 @@ MCP servers, skills, plugins, hooks, headless mode, sandboxing, and more.
 ## SystemOne decision layer
 
 SystemOne is a **decision layer**, not a cost router: every task runs See >
-Decide > Act, and the local SystemOne shim (`http://127.0.0.1:8765`,
-`knowledgator/gliclass-edge-v3.0` classifier) makes the decisions with
-calibrated probabilities and honest uncertainty. Cost/quality routing is one
+Decide > Act, and the local SystemOne shim (`http://127.0.0.1:8765`)
+makes the decisions with the D1 decision models (`d1-3b` /
+`d1-omni-600m`, served by LM Studio) reviewing a calibrated hybrid
+(deterministic rules + `knowledgator/gliclass-edge-v3.0`, which remains
+the fail-open fallback), with calibrated probabilities and honest
+uncertainty. Cost/quality routing is one
 facet of `route`, which is one facet of deciding. The client is the embedded
 `xai-grok-systemone` Rust crate, compiled into this binary — no external
 adapter to wire, no config entries to add, no shim to launch by hand. If the

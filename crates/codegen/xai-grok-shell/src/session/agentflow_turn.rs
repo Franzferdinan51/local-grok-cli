@@ -102,6 +102,12 @@ pub(crate) struct AgentFlowTurnState {
     doom: DoomLoopTurnState,
     budget_stage: BudgetStageState,
     last_sent_tool_names: Vec<String>,
+    /// Tool descriptors (name, description) from the most recent sampler
+    /// call. The NEXT turn's route sends these as its `scoring.tools`
+    /// inventory, so the shim ranks the tools the session actually has.
+    /// Deliberately not cleared by `reset_turn_state`: the route runs
+    /// before the reset within a turn.
+    last_tool_descriptors: Vec<(String, String)>,
 }
 
 fn read_env(key: &str) -> Option<String> {
@@ -223,12 +229,27 @@ impl AgentFlowTurnState {
     /// Fail-open: returns the input unchanged when disabled, when pruning is
     /// off, or when the route carried no usable signal. Records the sent
     /// tool names for doom-loop untried-tool suggestions.
+    /// Descriptors of the tools most recently sent to the model: the
+    /// inventory the next route request scores (see systemone_turn).
+    pub(crate) fn last_tool_descriptors(&self) -> Vec<(String, String)> {
+        self.last_tool_descriptors.clone()
+    }
+
     pub(crate) fn filter_tool_definitions(
         &mut self,
         defs: Vec<ToolDefinition>,
     ) -> Vec<ToolDefinition> {
         let get_env: EnvReader<'_> = &read_env;
         self.last_sent_tool_names = defs.iter().map(|d| d.function.name.clone()).collect();
+        self.last_tool_descriptors = defs
+            .iter()
+            .map(|d| {
+                (
+                    d.function.name.clone(),
+                    d.function.description.clone().unwrap_or_default(),
+                )
+            })
+            .collect();
         if !self.config.enabled {
             return defs;
         }

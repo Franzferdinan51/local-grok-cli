@@ -889,8 +889,14 @@ pub async fn run_single_turn(
     if systemone_cfg.routing_active() {
         router_status = Some(xai_grok_systemone::ensure_router(&systemone_cfg).await);
         let task_text = headless_prompt_text(prompt.as_ref());
-        let mut decision =
-            xai_grok_systemone::route_for_task(&task_text, "prompt", &systemone_cfg).await;
+        let scoring_tools = xai_grok_systemone::suggest::mcp_scoring_tools();
+        let mut decision = xai_grok_systemone::route::route_for_task_with_tools(
+            &task_text,
+            "prompt",
+            &systemone_cfg,
+            &scoring_tools,
+        )
+        .await;
         let (_suggestions, prune) =
             xai_grok_systemone::suggest_and_maybe_prune(&task_text, &mut decision, &systemone_cfg);
         systemone_prune = prune;

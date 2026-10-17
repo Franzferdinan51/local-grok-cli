@@ -52,6 +52,20 @@ pub struct McpServerInfo {
     pub description: String,
 }
 
+/// The configured MCP inventory in the route request's `scoring.tools`
+/// shape (kind `mcp`), for [`crate::route::route_for_task_with_tools`].
+/// Fail-open: empty when the config cannot be read.
+pub fn mcp_scoring_tools() -> Vec<crate::route::ScoringTool> {
+    inventory_from_config()
+        .into_iter()
+        .map(|srv| crate::route::ScoringTool {
+            id: srv.name,
+            kind: "mcp".to_string(),
+            description: srv.description,
+        })
+        .collect()
+}
+
 /// A ranked suggestion: which server matched and why.
 #[derive(Debug, Clone)]
 pub struct ServerSuggestion {
