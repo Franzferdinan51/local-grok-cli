@@ -179,6 +179,7 @@ mod tests {
             model_advisory: None,
             model_selected: None,
             second_opinion: None,
+            d1_decision: None,
             confidence: None,
             source: "fail-open".to_string(),
             model_ranking: Vec::new(),
@@ -220,6 +221,7 @@ mod tests {
                 agree: false,
                 rationale: "bigger task than it looks".to_string(),
             }),
+            d1_decision: None,
             confidence: Some(0.62),
             source: "shim".to_string(),
             model_ranking: vec![
@@ -261,6 +263,7 @@ mod tests {
             model_advisory: None,
             model_selected: None,
             second_opinion: None,
+            d1_decision: None,
             confidence: Some(0.9),
             source: "shim".to_string(),
             model_ranking: Vec::new(),
