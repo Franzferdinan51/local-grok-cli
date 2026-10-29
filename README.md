@@ -58,7 +58,7 @@ version and the grok-build version that overlay was applied on.
 
 ```sh
 grok-local --version
-# grok-local 0.5.7 (<git sha>)
+# grok-local 0.6.0 (<git sha>)
 # grok-build 1.0.45 (<SOURCE_REV>)
 ```
 
