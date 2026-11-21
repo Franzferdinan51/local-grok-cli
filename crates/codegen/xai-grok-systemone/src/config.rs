@@ -425,9 +425,9 @@ mod tests {
         // Jeff-1 second head on by default; the :8079 sidecar is never a
         // route fallback (it serves typed decisions, not /v1/systemone/route).
         assert!(cfg.jeff1_enabled);
-        // D1 team: decision layer defaults to d1-3b, fast fallback d1-omni-600m.
-        assert_eq!(cfg.decision_model, "d1-3b");
-        assert_eq!(cfg.fast_decision_model, "d1-omni-600m");
+        // D1 team: decision layer defaults to d1-2b, fast fallback d1-omni-2b.
+        assert_eq!(cfg.decision_model, "d1-2b");
+        assert_eq!(cfg.fast_decision_model, "d1-omni-2b");
     }
 
     #[test]

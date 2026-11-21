@@ -58,10 +58,10 @@ use crate::shim::RouterStatus;
 
 /// Default decision model: D1 3B - primary decision model for
 /// SystemOne routing. Used automatically when the router does not specify one.
-pub const DEFAULT_DECISION_MODEL: &str = "d1-3b";
+pub const DEFAULT_DECISION_MODEL: &str = "d1-2b";
 /// Fast fallback decision model: D1 Omni 600M - lightweight alternative
 /// for latency-sensitive routing decisions.
-pub const DEFAULT_FAST_MODEL: &str = "d1-omni-600m";
+pub const DEFAULT_FAST_MODEL: &str = "d1-omni-2b";
 
 /// SystemOne cost tier returned by the router.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -338,7 +338,7 @@ pub struct SecondOpinion {
 /// `d1_decision` wire key.
 ///
 /// Authoritative: when the shim reports it, a D1 decision model
-/// (d1-3b / d1-omni-600m, served by LM Studio) made the tier decision
+/// (d1-2b / d1-omni-2b, served by LM Studio) made the tier decision
 /// and the shim applied it — the hybrid (rules + classifier) route
 /// only proposed. `applied` mirrors the wire flag: it is set when
 /// D1's pick replaced the hybrid tier.
@@ -348,7 +348,7 @@ pub struct D1Decision {
     pub tier: String,
     /// D1's calibrated confidence in that tier (0..1 when reported).
     pub confidence: Option<f64>,
-    /// The decision model that answered (e.g. "d1-3b").
+    /// The decision model that answered (e.g. "d1-2b").
     pub model: String,
     /// Whether the shim applied D1's tier as the routed tier.
     pub applied: bool,
@@ -826,7 +826,7 @@ fn apply_route_payload(decision: &mut RouteDecision, payload: &serde_json::Value
                 model: o
                     .get("model")
                     .and_then(serde_json::Value::as_str)
-                    .unwrap_or("d1-3b")
+                    .unwrap_or("d1-2b")
                     .to_string(),
                 applied: o
                     .get("applied")
@@ -962,7 +962,7 @@ mod tests {
         assert_eq!(plain["kind"], "prompt");
         assert_eq!(plain["client"], "grok-local");
         assert!(plain.get("cost_bias").is_none());
-        assert_eq!(plain["model"], "d1-3b");
+        assert_eq!(plain["model"], "d1-2b");
 
         let biased = route_request_body("x", "turn", Some("QUALITY"), Some("d1-omni-600m"));
         assert_eq!(biased["cost_bias"], "quality");
